@@ -347,6 +347,20 @@ impl Query {
     }
 }
 
+impl Drop for Query {
+    /// Best-effort cleanup for a `Query` dropped without an explicit
+    /// `.close().await` (e.g. a message stream abandoned mid-iteration).
+    /// `Drop` can't `.await`, so this only *signals* the driver task to
+    /// close the transport — fire-and-forget, not a guarantee the
+    /// child has exited by the time `drop` returns. Harmless if
+    /// `close()` already ran: the outbound channel is closed by then
+    /// and this send silently no-ops.
+    fn drop(&mut self) {
+        let (tx, _rx) = oneshot::channel();
+        let _ = self.outbound.send(WriteCommand::Close(tx));
+    }
+}
+
 fn control_request_subtype(body: &ControlRequestBody) -> &'static str {
     match body {
         ControlRequestBody::Initialize { .. } => "initialize",
@@ -412,9 +426,23 @@ async fn drive(
                         fail_all_pending(&pending, &error);
                         let enriched = enrich_process_error(error, &last_error_result_text);
                         let _ = messages_tx.send(Err(enriched));
+                        // A read error doesn't imply the child already
+                        // exited (unlike a clean EOF, where
+                        // `read_messages()` has already reaped it) —
+                        // close explicitly so an error mid-stream never
+                        // leaks the subprocess.
+                        let _ = transport.close().await;
                         return;
                     }
-                    None => return,
+                    None => {
+                        // Clean EOF: `read_messages()` already reaped
+                        // the child before yielding it, but `close()`
+                        // is still idempotent and cheap — call it so
+                        // stdin/stdout handles are released deterministically
+                        // rather than whenever `transport` happens to drop.
+                        let _ = transport.close().await;
+                        return;
+                    }
                 }
             }
         }
