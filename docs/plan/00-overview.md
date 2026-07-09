@@ -207,14 +207,24 @@ project may be called done.
 | 3 | `04-phase-3-options.md` | `ClaudeAgentOptions` + CLI arg builder | 1 |
 | 4 | `05-phase-4-transport.md` | Subprocess transport + fake-CLI test harness | 2, 3 |
 | 5 | `06-phase-5-control-protocol.md` | `Query` actor, control request/response | 4 |
-| 6 | `07-phase-6-query.md` | Public `query()` one-shot API | 5 |
-| 7 | `08-phase-7-client.md` | Public `ClaudeClient` multi-turn API | 5 |
+| 6 | `07-phase-6-query.md` | Public `query()` + `query_stream()` (string AND streaming input) | 5 |
+| 7 | `08-phase-7-client.md` | Public `ClaudeClient` multi-turn API (incl. `send_stream`, `server_info`) | 5 |
 | 8 | `09-phase-8-permissions-hooks.md` | `can_use_tool` + hooks end-to-end | 7 |
 | 9 | `10-phase-9-mcp-tools.md` | In-process MCP tools | 7 |
 | 10 | `11-phase-10-release.md` | Examples, docs, parity audit, 0.1.0 prep | all |
 
 Appendix: `appendix-a-wire-protocol.md` — wire message samples used as
 test fixtures (each carries a `⚠️ VERIFY` pointer).
+
+## Parity Policy (near-100%, enforced)
+
+Coverage target is the ENTIRE upstream public surface: every export in
+`__init__.py`, every `ClaudeAgentOptions` field, every message/hook/
+permission type and field, every `ClaudeSDKClient` method, both input
+modes of `query()` (string and async-iterable → `query_stream()`), and
+cross-platform CLI discovery (unix + Windows). A feature may be absent
+from 0.1.0 ONLY with a written justification in `PARITY.md` reviewed at
+Phase 10 — "it was inconvenient" is not a justification.
 
 ## Definition of DONE for the whole project
 
