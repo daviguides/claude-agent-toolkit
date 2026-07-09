@@ -76,6 +76,9 @@ pub enum PermissionResult {
     Allow {
         /// Replacement input; `None` keeps the original.
         updated_input: Option<serde_json::Value>,
+        /// Permission-rule updates to apply (e.g. "always allow").
+        /// Mirrors upstream `PermissionResultAllow.updated_permissions`.
+        updated_permissions: Option<Vec<PermissionUpdate>>,
     },
     /// Deny the call.
     Deny {
@@ -85,7 +88,73 @@ pub enum PermissionResult {
         interrupt: bool,
     },
 }
+
+/// A permission-rule update, as accepted by the CLI.
+///
+/// Upstream models this as the `PermissionUpdate` dataclass with a
+/// `type` discriminator (`addRules`, `replaceRules`, `removeRules`,
+/// `setMode`, `addDirectories`, `removeDirectories`) plus `rules`
+/// (tool_name + rule_content pairs), `behavior`, `mode`,
+/// `directories`, and `destination` (`userSettings`/`projectSettings`/
+/// `localSettings`/`session`). ⚠️ VERIFY the exact variant set, field
+/// names, and camelCase wire spellings in `types.py` (including its
+/// `to_dict`-style serializer), then encode as:
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PermissionUpdate {
+    /// Add permission rules.
+    #[serde(rename_all = "camelCase")]
+    AddRules {
+        rules: Vec<PermissionRuleValue>,
+        behavior: String,
+        destination: String,
+    },
+    /// Replace permission rules.
+    #[serde(rename_all = "camelCase")]
+    ReplaceRules {
+        rules: Vec<PermissionRuleValue>,
+        behavior: String,
+        destination: String,
+    },
+    /// Remove permission rules.
+    #[serde(rename_all = "camelCase")]
+    RemoveRules {
+        rules: Vec<PermissionRuleValue>,
+        behavior: String,
+        destination: String,
+    },
+    /// Change the permission mode.
+    #[serde(rename_all = "camelCase")]
+    SetMode { mode: String, destination: String },
+    /// Grant directory access.
+    #[serde(rename_all = "camelCase")]
+    AddDirectories {
+        directories: Vec<String>,
+        destination: String,
+    },
+    /// Revoke directory access.
+    #[serde(rename_all = "camelCase")]
+    RemoveDirectories {
+        directories: Vec<String>,
+        destination: String,
+    },
+}
+
+/// One tool permission rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRuleValue {
+    /// Tool the rule applies to.
+    pub tool_name: String,
+    /// Rule content (pattern), when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_content: Option<String>,
+}
 ```
+
+Also type the incoming `permission_suggestions` on
+`ToolPermissionRequest` as `Option<Vec<PermissionUpdate>>` instead of
+raw `Value` (they are the same shape — ⚠️ VERIFY).
 
 Wire encoding of the decision inside the control response payload
 (⚠️ VERIFY field names in `_internal/query.py`):
@@ -138,11 +207,25 @@ pub struct HookInput {
 }
 
 /// Output of a hook callback, serialized into the control response.
-/// Start as a thin wrapper over raw JSON to guarantee parity:
-#[derive(Debug, Clone, Default)]
+///
+/// TYPED, mirroring upstream `HookJSONOutput` (⚠️ VERIFY field set and
+/// camelCase spellings in `types.py`). `extra` keeps forward-compat
+/// with fields this struct does not model yet.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct HookOutput {
-    /// Raw response payload (e.g. {"decision":"block","reason":...}).
-    pub payload: serde_json::Value,
+    /// `"block"` to block the action; `None` for no opinion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    /// Message injected into the conversation as a system message.
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+    /// Event-specific structured output (e.g. PreToolUse permission
+    /// decision). Kept as raw JSON — its shape varies per event.
+    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<serde_json::Value>,
+    /// Any additional upstream fields (flattened into the response).
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 ```
 
@@ -204,6 +287,17 @@ Hooks:
    `{"decision":"block","reason":"nope"}`; recorded response carries it.
 9. `unknown_callback_id_yields_error_response`.
 10. `callbacks_are_send_sync` — compile-time assertion test.
+11. `permission_update_serde_matches_wire` — rstest over all
+    `PermissionUpdate` variants: serialized JSON uses the camelCase
+    `type` tags and field names (compare against `serde_json::json!`
+    literals taken from upstream).
+12. `allow_with_updated_permissions_serializes_them` — `to_wire`
+    output contains `updatedPermissions` array (⚠️ VERIFY key name).
+13. `hook_output_serializes_typed_fields` — decision + systemMessage +
+    hookSpecificOutput all present with camelCase keys; `Default`
+    serializes to `{}`.
+14. `hook_output_extra_fields_flatten` — an `extra` entry appears at
+    the top level of the JSON.
 
 ## Acceptance Gate
 
