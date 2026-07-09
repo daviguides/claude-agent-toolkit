@@ -615,3 +615,87 @@ runtime. Used for `interrupt`/`set_permission_mode`/`set_model`/
 `initialize`-rejection/`server_info` tests — anywhere a test needs a
 control response to actually match whatever id production code
 generated.
+
+## Phase 8 — `can_use_tool` permission callback and hooks
+
+**Finding — `HookEvent` has 10 upstream variants, not 6**: the plan's
+sketch lists `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`,
+`SubagentStop`, `PreCompact`. Upstream's `types.py` union has 4 more:
+`PostToolUseFailure`, `Notification`, `SubagentStart`,
+`PermissionRequest`. All 10 are modeled — omitting any would be a real
+registration capability gap (a caller genuinely could not hook that
+event at all).
+
+**`HookInput` stays a raw JSON payload, not 10 discriminated
+structs — a deliberate, bounded simplification**: upstream types each
+hook event's input as its own TypedDict with event-specific required
+fields (e.g. `PostToolUseHookInput` adds `tool_response`,
+`SubagentStopHookInput` adds `agent_id`/`agent_transcript_path`/
+`agent_type`/`stop_hook_active`, etc.) — a real, if narrow, union.
+Modeling all 10 with their per-event field sets is substantial
+additional surface whose only consumer is the SAME closure a caller
+already writes for their own hook logic; the raw payload already gives
+full access to every field via `serde_json::Value` indexing — no
+capability is lost, only compile-time field name checking for a type
+callers write themselves anyway. The plan's own sketch already fixed
+this design (`pub struct HookInput { pub payload: Value }`); kept as
+specified.
+
+**`CanUseTool` callback carries the FULL upstream `ToolPermissionContext`,
+not just tool_name/input/suggestions**: the plan's `ToolPermissionRequest`
+sketch has 3 fields; upstream's actual callback signature is
+`(tool_name, input, ToolPermissionContext)` where the context has 8
+fields (`suggestions`, `tool_use_id`, `agent_id`, `blocked_path`,
+`decision_reason`, `title`, `display_name`, `description` — `signal`
+is an unused future-abort-signal placeholder, omitted). All 8 were
+already captured on `InboundControlRequestBody::CanUseTool` in Phase
+5 (confirmed exhaustive against `SDKControlPermissionRequest` back
+then) — Phase 8 only had to plumb them through to the public
+callback type instead of discarding them.
+
+**`can_use_tool` validation now implemented (was deferred since Phase
+6)**: `ClaudeAgentOptions.can_use_tool` didn't exist before this
+phase, so the mutual-exclusivity checks upstream's `_connect_inner`/
+`_process_query_inner` perform had nothing to validate. Now
+implemented exactly as upstream: (1) `can_use_tool` + a plain-string
+`query()` prompt is rejected (`Error::ControlProtocol`, matching
+upstream's `ValueError`) — `ClaudeClient::connect()` never takes a
+string prompt in this port's design (Phase 7 deviation), so only
+`query()`'s string-prompt path needs this check; (2) `can_use_tool` +
+an explicit `permission_prompt_tool_name` is rejected; (3) when
+`can_use_tool` is set and no conflict exists, `permission_prompt_tool_name`
+is auto-set to `"stdio"`, matching upstream's `replace(options,
+permission_prompt_tool_name="stdio")`.
+
+**`_warn_if_can_use_tool_shadowed` ported as a `tracing::warn!`**:
+upstream uses Python's `warnings.warn`; this crate has no equivalent
+warning registry, so the advisory (allowed_tools entries or
+`bypassPermissions` mode that would auto-approve a call before the
+callback is ever consulted) is logged via `tracing::warn!` at
+connect/query time instead. Same trigger conditions, same message
+content, different delivery mechanism — a language-level adaptation,
+not a lost capability (the crate's users are expected to have tracing
+configured; anyone who isn't already loses log lines everywhere, not
+specially here).
+
+**Hook `hook_{i}` id assignment made deterministic via explicit event
+order, not `HashMap` iteration order**: `ClaudeAgentOptions.hooks` is
+keyed by `HookEvent`; Rust `HashMap` iteration order is unspecified
+and would make `hook_0`, `hook_1`, ... assignment nondeterministic
+across runs (breaking both reproducibility and the phase-8 spec's own
+test expectations for exact id sequences). IDs are assigned by walking
+a fixed `HookEvent::ALL` array in declaration order, then each event's
+matcher list in registration order, then each matcher's callback list
+in registration order — matching upstream's dict-insertion-order
+iteration (Python dicts preserve insertion order) as closely as a
+`HashMap`-keyed design can.
+
+**`PermissionUpdate` fields are all optional per-variant, not
+required**: the plan's sketch makes `rules`/`behavior`/`destination`
+etc. required struct-variant fields. Upstream's `to_dict()` conditionally
+includes each one only `if self.X is not None` — a `PermissionUpdate`
+can carry a `type` and nothing else. All fields use
+`skip_serializing_if = "Option::is_none"`; `rename_all = "camelCase"`
+on both the enum (for the `type` tag: `addRules`, `setMode`, etc.) and
+each struct variant's fields (`toolName`, `ruleContent`) reproduces
+`to_dict()`'s exact conditional shape without a custom `Serialize` impl.
