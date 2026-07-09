@@ -33,9 +33,25 @@ plus a pure, unit-testable function that turns options into CLI args.
 | `env` | `HashMap<String, String>` | (not a flag — subprocess env) | |
 | `extra_args` | `HashMap<String, Option<String>>` | `--<key> [value]` | escape hatch for new flags |
 | `max_buffer_size` | `Option<usize>` | (not a flag — reader limit) | default 1 MiB (⚠️ VERIFY constant) |
-| `stderr` | callback (deferred) | — | model in Phase 4 as an optional channel, not here |
+| `plugins` | `Vec<PluginConfig>` | `--plugins <json>`-style (⚠️ VERIFY exact flag name and JSON shape in `_build_command()`) | **REQUIRED for reference use cases** (foreman passes `plugins=[{...}]`); upstream type is `SdkPluginConfig` in `types.py` — mirror its fields exactly |
+| `stderr` | `Option<StderrCallback>` | (not a flag — consumed by the Phase 4 transport, invoked once per stderr line) | **REQUIRED for reference use cases** (refiner and foreman capture stderr for error diagnostics) |
 | `can_use_tool` | callback (deferred to Phase 8) | — | field exists but is added in Phase 8 |
 | `hooks` | callback map (deferred to Phase 8) | — | added in Phase 8 |
+
+### Reference use cases (do not regress these)
+
+Three real projects define the minimum bar for this options struct —
+their wrappers must be portable 1:1:
+
+- `continuum/tools/orch/refiner` → `refiner/core/sdk_wrapper.py`
+- `continuum/tools/orch/foreman` → `foreman/core/sdk_wrapper.py`
+- `prisma/backend` → `src/prisma/agents/claude_runner.py`
+
+Fields they exercise: `cwd`, `model`, `max_turns`, `permission_mode`,
+`settings` (as a path AND as an inline JSON string — both are just the
+string value, no special handling), `allowed_tools`, `add_dirs`,
+`resume`, `include_partial_messages`, `system_prompt` (preset+append
+and plain string), `plugins`, `stderr`.
 
 Upstream fields not listed here that exist in `types.py` (e.g. `user`)
 MUST be added too — walk the dataclass field by field and tick each off.
@@ -145,12 +161,35 @@ configs without `"type"` for stdio. If so, implement a custom
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::types::mcp::McpServers;
 use crate::types::permission::PermissionMode;
 
 /// Default stdout line-buffer limit in bytes (⚠️ VERIFY vs upstream).
 pub const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024;
+
+/// Callback invoked once per CLI stderr line.
+///
+/// Mirrors upstream `ClaudeAgentOptions.stderr`. Used by callers to
+/// capture diagnostics (e.g. keep the last N lines for error reports).
+pub type StderrCallback = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// A Claude Code plugin made available to the session.
+///
+/// Mirrors upstream `SdkPluginConfig` (⚠️ VERIFY field names and the
+/// `type` tag values in `types.py`; expected: `{"type":"local","path":...}`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PluginConfig {
+    /// Plugin loaded from a local directory.
+    Local {
+        /// Path to the plugin directory.
+        path: PathBuf,
+    },
+}
 
 /// System prompt configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -170,7 +209,7 @@ pub enum SystemPrompt {
 ///
 /// Construct with [`ClaudeAgentOptions::builder()`]; `Default` gives
 /// upstream-equivalent defaults.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct ClaudeAgentOptions {
     pub system_prompt: Option<SystemPrompt>,
@@ -193,12 +232,43 @@ pub struct ClaudeAgentOptions {
     pub env: HashMap<String, String>,
     pub extra_args: HashMap<String, Option<String>>,
     pub max_buffer_size: Option<usize>,
+    pub plugins: Vec<PluginConfig>,
+    pub stderr: Option<StderrCallback>,
 }
 ```
 
 Every public field gets a `///` doc line (omitted above for brevity —
 the executor MUST write them; `missing_docs = "warn"` + clippy gate
 will catch omissions).
+
+**Debug impl**: because `stderr` (and, from Phase 8, the other
+callbacks) is a closure, `#[derive(Debug)]` is impossible — implement
+`Debug` MANUALLY from this phase on, printing `stderr: <set|unset>`
+for callback fields and normal values for the rest. `PartialEq` is NOT
+derived (closures are not comparable); the `builder_sets_every_field`
+test asserts field-by-field instead of whole-struct equality
+(callbacks asserted via `is_some()`).
+
+Builder gains, alongside the plain setters:
+
+```rust
+impl ClaudeAgentOptionsBuilder {
+    /// Registers a callback invoked once per CLI stderr line.
+    pub fn stderr<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        self.stderr = Some(Arc::new(callback));
+        self
+    }
+
+    /// Adds a plugin.
+    pub fn plugin(mut self, plugin: PluginConfig) -> Self {
+        self.plugins.push(plugin);
+        self
+    }
+}
+```
 
 Builder: implement `ClaudeAgentOptions::builder()` returning
 `ClaudeAgentOptionsBuilder` with one fluent method per field
@@ -241,12 +311,22 @@ In `options.rs` tests module — one test per mapping row, plus:
 8. `system_prompt_custom_vs_preset_append` — `Custom` → `--system-prompt`;
    `Preset{append: Some}` → `--append-system-prompt` (⚠️ VERIFY exact
    upstream semantics before writing this test).
-9. `builder_sets_every_field` — build with all fields set, assert struct
-   equality field-by-field.
+9. `builder_sets_every_field` — build with all fields set, assert
+   field-by-field (callbacks via `is_some()`).
 10. `permission_mode_serde_roundtrip` — rstest over all 4 variants:
     `serde_json::to_string` → the wire string; back → equal.
 11. `mcp_config_deserializes_stdio_without_type_tag` — only if the
     optional-tag behavior is confirmed upstream.
+12. `plugins_serialize_into_cli_flag` — one `PluginConfig::Local` →
+    the flag (⚠️ VERIFY spelling) appears with JSON whose `type` is
+    `"local"` and `path` round-trips.
+13. `empty_plugins_produce_no_flag` — default options → no plugins flag.
+14. `stderr_callback_is_not_a_cli_flag` — options with `stderr` set →
+    `build_cli_args` output identical to the same options without it.
+15. `options_debug_marks_callbacks_without_printing_them` —
+    `format!("{options:?}")` with `stderr` set contains `"set"` (or the
+    chosen marker) and does not panic.
+16. `plugin_config_serde_roundtrip` — `Local` variant JSON round-trip.
 
 Register modules in `src/types.rs` (`pub mod mcp; pub mod options;
 pub mod permission;`) and re-export the main names from `lib.rs`.
