@@ -507,3 +507,77 @@ canned success before printing the scripted output. Existing
 `scripted`/`recording`/`responding`/`scripted_and_recording` helpers
 are untouched (Phase 5's tests call `Query::start`/`start_with`
 directly and never trigger `initialize`, so they don't need this).
+
+## Phase 7 — Public `ClaudeClient`
+
+**Finding — far more public methods than the plan lists**: the plan's
+`ClaudeClient` sketch has 9 methods. Upstream `ClaudeSDKClient` has 16:
+the 9 plus `rewind_files`, `reconnect_mcp_server`, `toggle_mcp_server`,
+`stop_task`, `get_mcp_status`, `get_context_usage`, `get_server_info`.
+All 7 additions are thin wrappers over `Query` convenience methods
+Phase 5 already built (for exactly this reason — Phase 5's
+DEVIATIONS.md entry already flagged that Phase 7 would "thinly wrap
+these rather than reimplementing them"). No new `ControlRequestBody`
+variants were needed; all 9 already exist.
+
+**`get_server_info()` needed a new cache on `Query`**: upstream returns
+`self._query._initialization_result` — the raw response from `connect()`'s
+own `initialize()` call, cached, not re-fetched. `Query` gained an
+`initialization_result: tokio::sync::Mutex<Option<Value>>` field,
+populated inside `initialize()` on success; `server_info(&self) ->
+Option<Value>` exposes a clone of it.
+
+**`connect()` takes no initial-prompt parameter — a deliberate,
+justified Rust simplification**: upstream's `connect(prompt: str |
+AsyncIterable | None = None)` exists because `SubprocessCLITransport`'s
+constructor requires *some* prompt/iterable — a bare interactive
+connect (`__aenter__`, i.e. `async with ClaudeSDKClient()`) has to pass
+a synthetic async generator that "never yields, but indicates this
+function is an iterator and keeps the connection open" just to satisfy
+that constructor. This crate's `SubprocessTransport` is prompt-agnostic
+from Phase 4 (confirmed: the `prompt` constructor argument upstream
+stores is dead code, never read back) — there is no constructor to
+satisfy, so no workaround is needed. `ClaudeClient::connect(options)`
+takes no prompt; callers use `send()`/`send_content()`/`send_stream()`
+immediately after connecting for the equivalent of
+`connect(prompt=...)`. Functionally identical outcome, no capability
+lost.
+
+**Added — `connect_with_transport()` for custom transports**: upstream's
+`ClaudeSDKClient(transport=...)` accepts a caller-supplied `Transport`
+(documented for e.g. remote Claude Code connections). `Query::start`
+is already generic over `impl Transport + 'static` and — importantly —
+returns a *non-generic* `Query` (the transport type is fully erased
+once it moves into the spawned driver task), so `ClaudeClient` itself
+never needs to be generic. Both `connect()` (builds a
+`SubprocessTransport` from `options`) and the new
+`connect_with_transport(transport, options)` (options used only for
+the `initialize` handshake's hooks/agents/skills — the transport is
+already built) share one internal helper.
+
+**No `Drop` impl needed on `ClaudeClient` — already covered
+transitively**: the phase-7 spec's sketch suggested a best-effort
+`Drop` via `kill_on_drop(true)`, which Phase 4 deliberately did NOT set
+(it chose graceful close-then-escalate instead — see Phase 4's
+DEVIATIONS.md entry). `ClaudeClient` holds a `Query` field, and `Query`
+already has its own best-effort `Drop` (added retroactively in Phase
+6) that signals the driver to close on drop. Dropping a `ClaudeClient`
+drops its `Query` field, which gets this cleanup for free — no
+additional `Drop` impl needed or added.
+
+**No public `session_id` parameter on `send`/`send_content`/`send_stream`**:
+upstream's `query(prompt, session_id="default")` accepts a custom
+session id per call. The phase-7 spec's own fixed method sketch omits
+this parameter, and none of the three reference use cases exercise
+multi-session usage on one client. All three methods use
+`DEFAULT_SESSION_ID = "default"`. The underlying `Query::send_user_message`
+(Phase 5) already accepts an arbitrary `session_id`, so exposing a
+custom-session variant later is a small, low-risk addition if ever
+needed — not a capability actually lost, just not surfaced publicly
+yet.
+
+**`can_use_tool` mutual-exclusivity validation — same deferral as
+Phase 6**: `_connect_inner` validates `can_use_tool` + string-prompt
+and `can_use_tool` + `permission_prompt_tool_name` combinations.
+`ClaudeAgentOptions.can_use_tool` doesn't exist yet (Phase 8). Nothing
+to validate against yet; noted for Phase 8 to add.
