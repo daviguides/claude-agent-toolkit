@@ -27,8 +27,9 @@ plus a pure, unit-testable function that turns options into CLI args.
 | `mcp_servers` | `McpServers` | `--mcp-config <json>` | JSON `{"mcpServers": {...}}`; SDK (in-process) servers serialize as `{"type": "sdk", "name": ...}` — ⚠️ VERIFY |
 | `include_partial_messages` | `bool` | `--include-partial-messages` | flag only when true |
 | `fork_session` | `bool` | `--fork-session` | flag only when true |
-| `agents` | `Option<serde_json::Value>` | `--agents <json>` | keep raw JSON for now (subagent definitions) |
+| `agents` | `Option<HashMap<String, AgentDefinition>>` | `--agents <json>` | TYPED (see Deliverable C) — JSON object keyed by agent name; ⚠️ VERIFY field set in `types.py` `AgentDefinition` |
 | `setting_sources` | `Option<Vec<String>>` | `--setting-sources a,b` | ⚠️ VERIFY spelling & join rule |
+| `user` | `Option<String>` | ⚠️ VERIFY flag in `_build_command()` | exists in upstream options |
 | `cwd` | `Option<PathBuf>` | (not a flag — subprocess working dir) | |
 | `env` | `HashMap<String, String>` | (not a flag — subprocess env) | |
 | `extra_args` | `HashMap<String, Option<String>>` | `--<key> [value]` | escape hatch for new flags |
@@ -177,6 +178,24 @@ pub const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024;
 /// capture diagnostics (e.g. keep the last N lines for error reports).
 pub type StderrCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// A programmatic subagent definition.
+///
+/// Mirrors upstream `AgentDefinition` in `types.py` (⚠️ VERIFY the
+/// exact field set and which are optional; expected as below).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentDefinition {
+    /// When to use this agent (shown to the orchestrator).
+    pub description: String,
+    /// The agent's system prompt.
+    pub prompt: String,
+    /// Tools available to the agent; `None` inherits all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+    /// Model override for the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// A Claude Code plugin made available to the session.
 ///
 /// Mirrors upstream `SdkPluginConfig` (⚠️ VERIFY field names and the
@@ -226,7 +245,7 @@ pub struct ClaudeAgentOptions {
     pub mcp_servers: McpServers,
     pub include_partial_messages: bool,
     pub fork_session: bool,
-    pub agents: Option<serde_json::Value>,
+    pub agents: Option<HashMap<String, AgentDefinition>>,
     pub setting_sources: Option<Vec<String>>,
     pub cwd: Option<PathBuf>,
     pub env: HashMap<String, String>,
@@ -234,6 +253,7 @@ pub struct ClaudeAgentOptions {
     pub max_buffer_size: Option<usize>,
     pub plugins: Vec<PluginConfig>,
     pub stderr: Option<StderrCallback>,
+    pub user: Option<String>,
 }
 ```
 
@@ -327,6 +347,11 @@ In `options.rs` tests module — one test per mapping row, plus:
     `format!("{options:?}")` with `stderr` set contains `"set"` (or the
     chosen marker) and does not panic.
 16. `plugin_config_serde_roundtrip` — `Local` variant JSON round-trip.
+17. `agents_serialize_as_named_object` — one `AgentDefinition` keyed
+    `"reviewer"` → `--agents` flag with JSON
+    `{"reviewer":{"description":...,"prompt":...}}`; optional fields
+    absent when `None`.
+18. `agent_definition_serde_roundtrip`.
 
 Register modules in `src/types.rs` (`pub mod mcp; pub mod options;
 pub mod permission;`) and re-export the main names from `lib.rs`.
