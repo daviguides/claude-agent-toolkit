@@ -2,6 +2,12 @@
 //!
 //! Unix-only: the scripts are `#!/bin/sh`. Integration tests that use
 //! this harness are gated with `#[cfg(unix)]` at the call site.
+//!
+//! This file is shared by multiple test targets, each via its own
+//! `mod fake_cli;`/`#[path] mod fake_cli;` inclusion — a helper unused
+//! by one target but used by another is not dead code overall, so
+//! per-target dead-code warnings here are silenced blanket.
+#![allow(dead_code)]
 
 use std::fmt::Write as _;
 use std::fs;
@@ -112,6 +118,74 @@ pub fn recording(lines: &[&str], exit_code: i32) -> FakeCli {
         body.push_str(&shell_single_quote(line));
         body.push('\n');
     }
+    let _ = writeln!(body, "exit {exit_code}");
+    write_script(dir, &body)
+}
+
+/// A fake CLI that reads stdin lines and responds per a simple rule
+/// table: each incoming line matching `*pattern*` triggers printing
+/// the paired response line to stdout. Once stdin closes, `trailing`
+/// lines are printed, then the process exits 0.
+///
+/// `rules` patterns are plain substrings (no shell-glob escaping) —
+/// keep them simple identifiers like `"interrupt"` or `"hook_callback"`.
+///
+/// # Panics
+///
+/// Panics on test-setup failure (temp dir or script creation).
+#[must_use]
+pub fn responding(rules: &[(&str, &str)], trailing: &[&str]) -> FakeCli {
+    let dir = TempDir::new().expect("create temp dir");
+    let mut body = String::from("#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in\n");
+    for (pattern, response) in rules {
+        let _ = writeln!(
+            body,
+            "    *{pattern}*) printf '%s\\n' {} ;;",
+            shell_single_quote(response)
+        );
+    }
+    body.push_str("  esac\ndone\n");
+    for line in trailing {
+        body.push_str("printf '%s\\n' ");
+        body.push_str(&shell_single_quote(line));
+        body.push('\n');
+    }
+    body.push_str("exit 0\n");
+    write_script(dir, &body)
+}
+
+/// A fake CLI that immediately prints `lines` (independent of stdin),
+/// while concurrently recording every stdin line it receives to a
+/// file — for tests where the CLI must initiate a control request and
+/// the SDK's response needs to be captured afterward. Waits for stdin
+/// to close before exiting with `exit_code`.
+///
+/// # Panics
+///
+/// Panics on test-setup failure (temp dir or script creation).
+#[must_use]
+pub fn scripted_and_recording(lines: &[&str], exit_code: i32) -> FakeCli {
+    let dir = TempDir::new().expect("create temp dir");
+    let recording_path = dir.path().join("stdin_recording.txt");
+
+    // The stdout writer runs backgrounded (it doesn't touch stdin, so
+    // backgrounding it is harmless); the stdin recorder stays in the
+    // foreground. The reverse — backgrounding `cat > file` — silently
+    // loses all input: bash redirects a backgrounded job's stdin to
+    // /dev/null in non-interactive scripts when job control is off.
+    let mut body = String::from("#!/bin/sh\n(\n");
+    for line in lines {
+        body.push_str("printf '%s\\n' ");
+        body.push_str(&shell_single_quote(line));
+        body.push('\n');
+    }
+    body.push_str(") &\n");
+    let _ = writeln!(
+        body,
+        "cat > {}",
+        shell_single_quote(&recording_path.display().to_string())
+    );
+    body.push_str("wait\n");
     let _ = writeln!(body, "exit {exit_code}");
     write_script(dir, &body)
 }

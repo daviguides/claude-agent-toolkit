@@ -351,3 +351,27 @@ N" message with the structured error text) since it directly improves
 diagnostics and upstream already does it — not new scope, a faithful
 port of an existing upstream behavior the phase-5 spec's sketch simply
 didn't mention.
+
+**Tests live inline in `query.rs`, not `tests/protocol_test.rs`**:
+`Query`, `QueryHandlers`, and the control wire types are deliberately
+`pub(crate)` — internal plumbing until Phase 6/7 build the public API
+on top, matching the phase-5 spec's own framing ("everything public
+sits on top"). An external integration-test crate (anything under
+`tests/`) can only see a crate's `pub` surface, so it structurally
+cannot reach `pub(crate)` items — `tests/protocol_test.rs` as literally
+specified would not compile. Tests instead live in
+`#[cfg(test)] mod tests` inside `src/protocol/query.rs`, sharing the
+`tests/fake_cli.rs` harness via `#[path = "../../tests/fake_cli.rs"]
+mod fake_cli;` declared at the top of `query.rs` (not nested inside
+`mod tests`, which would compute the wrong virtual base directory for
+the `#[path]` and fail to find the file).
+
+**Fake-CLI harness bug found and fixed**: the first `scripted_and_recording`
+implementation backgrounded the stdin-recording `cat`  (`cat > file &`)
+so it could also emit unprompted stdout lines. This silently loses
+all input: bash redirects a backgrounded job's stdin to `/dev/null` in
+non-interactive scripts when job control is off (confirmed by manual
+repro outside the test suite). Fixed by backgrounding the *stdout
+writer* instead and keeping the stdin recorder (`cat > file`) in the
+foreground — the writer doesn't touch stdin, so backgrounding it is
+harmless, and the recorder now correctly inherits the real stdin.
