@@ -48,15 +48,16 @@ round-trip contains "pong".
 **Machine-readable source of truth**: unlike a prior draft of this
 plan, the parity table is NOT hand-written markdown. It is
 `docs/sync/parity.yaml`, a structured file — because a future tool
-(`catk-sync`, planned separately in `docs/plan-sync-cli/`, not part of
-this crate) diffs upstream commits against it programmatically. Writing
-it as data now avoids a breaking-format migration later.
+(`catk-sync`, a separate consumer crate/repo, NOT part of this crate —
+see its own `docs/foundation/vision.md` and `docs/plan/`) diffs
+upstream commits against it programmatically. Writing it as data now
+avoids a breaking-format migration later.
 
 Create `docs/sync/parity.yaml`:
 
 ```yaml
 # Source of truth for upstream↔Rust API parity. Machine-read by the
-# catk-sync tool (see docs/plan-sync-cli/). Do not hand-edit PARITY.md
+# catk-sync tool (a separate project). Do not hand-edit PARITY.md
 # — it is generated from this file (see below).
 version: 1
 upstream_pin: fdee0adc99f46e65ae9d6d029a6f4fb31bb8cffa  # keep in sync with docs/plan/UPSTREAM-PIN.md
