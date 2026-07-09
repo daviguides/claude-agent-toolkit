@@ -104,6 +104,13 @@ phase and gets fixed — the project is NOT done with the gap open.
    crate layout section replacing the "TBD" block.
 5. Add `CHANGELOG.md` with `0.1.0` entry listing capabilities.
 
+## Step 10.4b — CI matrix expansion
+
+Extend `.github/workflows/ci.yml` with a `windows-latest` job (build +
+`cargo test --lib` for the unix-gated integration tests) and
+`macos-latest` (full suite). Discovery unit tests must pass on all
+three platforms.
+
 ## Step 10.5 — Release checklist
 
 ```bash
