@@ -4,6 +4,7 @@
 //! async API for one-shot queries and interactive agent sessions.
 
 mod error;
+pub mod transport;
 pub mod types;
 
 pub use error::{Error, Result};
@@ -25,3 +26,6 @@ pub use types::session_store::{
     BoxFuture, SessionKey, SessionListSubkeysKey, SessionStore, SessionStoreEntry,
     SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry,
 };
+
+pub use transport::Transport;
+pub use transport::subprocess::{SubprocessTransport, find_cli, full_command_args};
