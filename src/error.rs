@@ -73,6 +73,14 @@ pub enum Error {
         /// Configured limit in bytes.
         limit: usize,
     },
+
+    /// A pluggable adapter (e.g. [`crate::types::session_store::SessionStore`])
+    /// does not implement this optional operation.
+    #[error("not implemented: {operation}")]
+    NotImplemented {
+        /// The unimplemented operation's name.
+        operation: String,
+    },
 }
 
 fn searched_path_suffix(searched_path: Option<&PathBuf>) -> String {
@@ -140,5 +148,13 @@ mod tests {
     #[test]
     fn errors_are_send_and_sync() {
         assert_send_sync::<Error>();
+    }
+
+    #[test]
+    fn not_implemented_display_includes_operation() {
+        let err = Error::NotImplemented {
+            operation: "list_sessions".to_string(),
+        };
+        assert!(err.to_string().contains("list_sessions"));
     }
 }
