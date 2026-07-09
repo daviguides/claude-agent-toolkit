@@ -66,6 +66,31 @@ impl ClaudeClient {
         todo!()
     }
 
+    /// Sends structured content (text or blocks) into the session.
+    ///
+    /// Covers upstream `client.query()` with dict/block payloads.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CliConnection`] when the session is closed.
+    pub async fn send_content(&self, content: UserContent) -> Result<()> { todo!() }
+
+    /// Feeds a whole async stream of messages into the session.
+    ///
+    /// Covers upstream `client.query()` with an `AsyncIterable`
+    /// argument (⚠️ VERIFY its exact semantics in `client.py` —
+    /// notably the `session_id` handling per item). Unlike
+    /// `query_stream()`, this does NOT close stdin afterwards; the
+    /// session stays open for further sends.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CliConnection`] on a broken session mid-feed.
+    pub async fn send_stream(
+        &self,
+        prompts: impl Stream<Item = UserContent> + Send,
+    ) -> Result<()> { todo!() }
+
     /// Streams messages until (and including) the next
     /// [`Message::Result`] — i.e. one complete response.
     pub fn receive_response(
@@ -115,11 +140,21 @@ impl ClaudeClient {
 }
 ```
 
-Additional upstream methods (⚠️ VERIFY the full list in `client.py` —
-e.g. `get_server_info`, `rename_session`, response to
-`supported_commands`): port every public method. For each, the recipe
-is identical: a `control_request(ControlRequestBody::X)` wrapper. Add
-any missing `ControlRequestBody` variants discovered during this walk.
+Additional upstream methods — port EVERY public method of
+`ClaudeSDKClient` (walk `client.py` top to bottom; ~100% parity is the
+requirement, a missing method must have a written justification in
+`PARITY.md`). Known list to expect (⚠️ VERIFY names/signatures):
+
+- `get_server_info()` — returns the initialize response data
+  (commands, output styles); in Rust: `server_info(&self) -> Option<&Value>`
+  from the cached initialize result.
+- any `rewind`/session-manipulation methods present in the pinned
+  upstream version.
+
+For each, the recipe is identical: a
+`control_request(ControlRequestBody::X)` wrapper (or cached-state
+getter). Add any missing `ControlRequestBody` variants discovered
+during this walk, with serde unit tests for their wire shape.
 
 Drop behavior: implement `Drop` only as best-effort `start_kill` via
 the transport's `kill_on_drop(true)` (already set in Phase 4) — do NOT
@@ -147,6 +182,13 @@ Register in `lib.rs`: `mod client; pub use client::ClaudeClient;`
 8. `set_model_sends_model_name` — recording contains the name.
 9. `send_after_disconnect_returns_connection_error`.
 10. `disconnect_twice_is_ok`.
+11. `send_content_blocks_writes_block_json` — `UserContent::Blocks`
+    with one tool_result block → recorded line carries the array form.
+12. `send_stream_forwards_all_items_and_keeps_session_open` — feed 2
+    items via `stream::iter`, then a regular `send()` → recording has
+    3 user-message lines; no stdin close between them.
+13. `server_info_available_after_connect` — fake answers initialize
+    with `{"commands":["x"]}` → `server_info()` exposes it.
 
 ## Acceptance Gate
 
