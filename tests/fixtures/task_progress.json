@@ -1,0 +1,1 @@
+{"type":"system","subtype":"task_progress","task_id":"task-abc","tool_use_id":"toolu_01","description":"Halfway there","usage":{"total_tokens":1234,"tool_uses":5,"duration_ms":9876},"last_tool_name":"Read","uuid":"uuid-2","session_id":"session-1"}

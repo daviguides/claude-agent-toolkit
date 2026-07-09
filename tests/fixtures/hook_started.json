@@ -1,0 +1,1 @@
+{"type":"system","subtype":"hook_started","hook_event":"PreToolUse","hook_name":"PreToolUse","session_id":"sess-123","uuid":"uuid-456","tool_name":"Bash","tool_input":{"command":"ls"}}
