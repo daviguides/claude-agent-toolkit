@@ -1,0 +1,32 @@
+[package]
+name = "claude-agent-toolkit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Idiomatic Rust port of the official Claude Agent SDK — build AI agents on the Claude Code CLI"
+license = "MIT"
+repository = "https://github.com/daviguides/claude-agent-toolkit"
+keywords = ["claude", "anthropic", "agent", "ai", "sdk"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+tokio = { version = "1", features = ["process", "rt", "rt-multi-thread", "io-util", "sync", "macros", "time"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+rstest = "0.24"
+pretty_assertions = "1"
+tempfile = "3"
+tracing-subscriber = "0.3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = "warn"
