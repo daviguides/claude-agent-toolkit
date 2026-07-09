@@ -258,3 +258,96 @@ write non-JSON diagnostic lines like `[SandboxDebug] ...` to stdout) —
 only a line that starts with `{` and fails to parse is a
 `JsonDecode` error. Mirrored exactly; the phase-4 spec's sketch only
 mentioned skipping blank lines.
+
+## Phase 5 — Control protocol and the Query actor
+
+**Finding — far more outbound control-request subtypes than the plan
+lists**: `06-phase-5-control-protocol.md` sketches only `initialize`,
+`interrupt`, `set_permission_mode`, `set_model`. Upstream `query.py`
+actually implements 9: those 4 plus `rewind_files` (file
+checkpointing), `mcp_reconnect`/`mcp_toggle` (`serverName` wire key,
+camelCase), `stop_task` (pairs with Phase 2b's task-lifecycle
+messages), `mcp_status`, and `get_context_usage`. All 9 are
+implemented as `ControlRequestBody` variants plus matching `pub(crate)`
+convenience methods on `Query` (`interrupt`, `set_permission_mode`,
+`set_model`, `rewind_files`, `reconnect_mcp_server`, `toggle_mcp_server`,
+`stop_task`, `get_mcp_status`, `get_context_usage`), mirroring
+`query.py` 1:1 — Phase 7's `ClaudeClient` will thinly wrap these rather
+than reimplementing them.
+
+**Confirmed — inbound (CLI-initiated) subtypes are exactly the plan's
+3**: `_handle_control_request`'s dispatch only recognizes `can_use_tool`,
+`hook_callback`, `mcp_message` — anything else raises "Unsupported
+control request subtype". No expansion needed here; `InboundControlRequestBody`
+has exactly 3 variants, matching upstream's `SDKControlPermissionRequest`
+(9 fields, not the plan's smaller sketch — `tool_use_id`, `agent_id`,
+`blocked_path`, `decision_reason`, `title`, `display_name`,
+`description` all included) and `SDKHookCallbackRequest`.
+
+**Confirmed — `control_cancel_request` exists**: the plan flagged this
+`⚠️ VERIFY`. Upstream's read loop handles it: look up the cancelled
+`request_id` in the in-flight spawned-handler-task map, abort it, no
+response is written back. Implemented identically.
+
+**Confirmed — timeout value**: upstream's `_send_control_request`
+default timeout is `60.0` seconds for ALL control requests (not just
+`initialize`); `Query.__init__`'s `initialize_timeout` parameter
+defaults to the same 60.0s but is independently overridable. Both are
+modeled as `Duration` fields on `Query`, defaulting to 60s, overridable
+per-instance (tests use a short override, matching the plan's own
+suggested test design).
+
+**Request-id format**: upstream generates
+`f"req_{counter}_{os.urandom(4).hex()}"`. This crate has no `rand`
+dependency (not in the fixed dependency list), so the random suffix is
+derived from `SystemTime` subsec-nanos instead of OS randomness — IDs
+only need to be unique-enough for in-process correlation and log
+readability, not cryptographically random, so this is a safe,
+dependency-free substitution. Kept injectable (a `suffix` the
+constructor can pin, e.g. `"test"`) so tests get deterministic ids
+(`req_1_test`, `req_2_test`, ...) exactly as the phase-5 spec's test
+design requires.
+
+**Two-task design, ownership refined (not redesigned)**: the plan's
+"write task: single owner of `transport.write_line`... read task:
+consumes `transport.read_messages()`" leaves an unaddressed Rust
+ownership question — both tasks would need `&mut self.transport`
+simultaneously, which the borrow checker forbids without wrapping the
+whole transport in a lock (defeating "zero locks around the
+transport"). Resolution: `read_messages()` is called once,
+synchronously, before spawning (yielding an owned `'static` stream that
+no longer borrows `transport`); the `Transport` value itself then moves
+into the write task, which also becomes the sole place `end_input()`
+and `close()` execute (routed through the same outbound channel as a
+`WriteCommand` enum — `Line(String)`, `EndInput`, `Close(oneshot::Sender<...>)`
+— rather than as raw strings). This preserves the prescribed
+architecture (one task reads, one task is the sole transport owner,
+all writes serialize through a channel) while resolving how
+`Query::close()`/`end_input()` reach a transport that has moved into a
+spawned task.
+
+**Deferred — `TranscriptMirrorBatcher` / live session-store write
+path**: upstream peels `"transcript_mirror"` messages off the read
+loop and hands them to a batcher (`_internal/transcript_mirror_batcher.py`,
+not read as part of this phase) that buffers and flushes entries to
+the `session_store` configured in Phase 3, with flush-before-result
+timing and its own error-reporting path (`report_mirror_error` →
+`MirrorErrorMessage`, already modeled in Phase 2b). This is a
+self-contained subsystem with its own file and batching/flush
+semantics, not "control protocol" proper, and it only activates when a
+caller has configured `session_store` (an advanced, opt-in feature).
+This port currently drops `"transcript_mirror"` messages in the read
+loop (recognized and skipped, never forwarded to consumers or
+misparsed) — matching upstream's own behavior in the common case where
+no batcher is attached. Building the batcher itself is left as a
+follow-up scoped investigation, not silently forgotten.
+
+**Added beyond upstream — structured-error enrichment on process
+exit**: ported upstream's `_last_error_result_text` tracking (remember
+the `errors`/`subtype` of the last `is_error: true` result message; if
+the transport then reports `Error::Process` from the CLI's expected
+non-zero exit after an error result, replace the generic "exit code
+N" message with the structured error text) since it directly improves
+diagnostics and upstream already does it — not new scope, a faithful
+port of an existing upstream behavior the phase-5 spec's sketch simply
+didn't mention.
