@@ -13,10 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 pub enum Error {
     /// The `claude` CLI binary could not be located.
-    #[error(
-        "Claude Code CLI not found{}. Install it with: npm install -g @anthropic-ai/claude-code",
-        searched_path_suffix(searched_path.as_ref())
-    )]
+    #[error("{}", cli_not_found_message(searched_path.as_ref()))]
     CliNotFound {
         /// Path that was checked, if a specific one was given.
         searched_path: Option<PathBuf>,
@@ -83,11 +80,19 @@ pub enum Error {
     },
 }
 
-fn searched_path_suffix(searched_path: Option<&PathBuf>) -> String {
-    match searched_path {
+fn cli_not_found_message(searched_path: Option<&PathBuf>) -> String {
+    let location = match searched_path {
         Some(path) => format!(" at {}", path.display()),
         None => String::new(),
-    }
+    };
+    format!(
+        "Claude Code CLI not found{location}. Install it with:\n  \
+         npm install -g @anthropic-ai/claude-code\n\n\
+         If already installed locally, try:\n  \
+         export PATH=\"$HOME/node_modules/.bin:$PATH\"\n\n\
+         Or provide the path explicitly:\n  \
+         ClaudeAgentOptions::builder().cli_path(\"/path/to/claude\")"
+    )
 }
 
 #[cfg(test)]
