@@ -4,5 +4,10 @@
 //! async API for one-shot queries and interactive agent sessions.
 
 mod error;
+pub mod types;
 
 pub use error::{Error, Result};
+pub use types::message::{
+    AssistantMessage, ContentBlock, Message, ResultMessage, StreamEvent, SystemMessage,
+    UserContent, UserMessage,
+};
