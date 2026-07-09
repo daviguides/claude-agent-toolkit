@@ -1,7 +1,8 @@
-# Phase 6 — Public `query()` API (One-Shot)
+# Phase 6 — Public `query()` API (One-Shot + Streaming Input)
 
 **Objective**: the single-turn entry point: prompt in, typed message
-stream out.
+stream out — in BOTH upstream input modes: plain string and async
+stream of messages (`AsyncIterable` in Python).
 
 **Upstream sources of truth**:
 - `reference/.../src/claude_agent_sdk/query.py` (public behavior/docs)
@@ -76,7 +77,50 @@ Design notes (fixed):
   upstream, return `Error::ControlProtocol` with a clear message when
   options carry streaming-only features into `query()`.
 
-Register in `lib.rs`: `mod query; pub use query::query;`
+## Deliverable B — `query_stream()` (streaming input, upstream parity)
+
+Upstream `query()` accepts `str | AsyncIterable[dict]`. Rust splits
+this into two functions (idiomatic — no untagged unions of unrelated
+types):
+
+```rust
+/// Runs a query fed by an async stream of user messages.
+///
+/// Mirrors upstream `query()` with an `AsyncIterable` prompt: the CLI
+/// is spawned in streaming mode, each item is forwarded as a user
+/// message as it arrives, and stdin is closed when `prompts` ends.
+/// Messages stream back concurrently while input is still being fed.
+///
+/// # Errors
+///
+/// Same as [`query`]; additionally, forwarding failures surface as
+/// stream items.
+pub async fn query_stream(
+    prompts: impl Stream<Item = UserContent> + Send + 'static,
+    options: ClaudeAgentOptions,
+) -> Result<impl Stream<Item = Result<Message>> + Send> {
+    // 1. SubprocessTransport with PromptInput::Streaming.
+    // 2. connect; Query::start with handlers from options.
+    // 3. ⚠️ VERIFY in _internal/client.py: whether streaming-mode
+    //    query() runs the initialize handshake (the interactive
+    //    client does; confirm for one-shot streaming input) — do
+    //    exactly what upstream does.
+    // 4. tokio::spawn a feeder task: for each item, send_user_message
+    //    (session_id "default"); when the stream ends, end_input().
+    //    A send failure inside the feeder: log via tracing and stop
+    //    feeding (the read side will surface the process error).
+    // 5. Return the same parse_message-mapped output stream as query().
+    todo!()
+}
+```
+
+Design note (fixed): items are `UserContent` (text or blocks), which
+covers upstream's dict messages for the user role; if upstream's
+iterable also accepts non-user message dicts (⚠️ VERIFY in
+`_internal/client.py` / `query.py`), widen the item type to a small
+`InputMessage` enum mirroring exactly what upstream forwards.
+
+Register in `lib.rs`: `mod query; pub use query::{query, query_stream};`
 
 ## Tests (`tests/query_test.rs`, write FIRST — all against fake CLI via `CLAUDE_AGENT_CLI_PATH`-style injection or an options-level cli path override; PICK the options override: add `cli_path: Option<PathBuf>` — check first whether upstream options include it (⚠️ VERIFY); if not, thread it via `extra` constructor on the transport and expose a `query_with_cli_path` test-only helper `#[doc(hidden)]`)
 
@@ -102,6 +146,24 @@ for testability and users ask for it; record in `DEVIATIONS.md`.
 7. `spawn_failure_is_returned_eagerly` — nonexistent cli path →
    `query(...).await` itself is `Err(Error::CliNotFound { .. })` (not a
    stream item).
+
+Streaming input (`query_stream`):
+
+8. `stream_prompt_items_are_forwarded_in_order` — feed 2 items via
+   `futures::stream::iter`; recording fake shows two user-message
+   lines in order, then stdin closed.
+9. `stream_input_uses_streaming_mode_flags` — recorded argv contains
+   `--input-format stream-json` and no `--print`.
+10. `responses_flow_while_input_still_open` — feeder stream built from
+    an `mpsc` channel held open; scripted CLI emits an assistant
+    message immediately; assert the message arrives BEFORE the test
+    sends the second prompt item (proves no input-drain barrier).
+11. `input_stream_end_closes_stdin` — after the iter ends, the fake
+    CLI (reading stdin until EOF) proceeds to print its result line;
+    stream completes.
+12. `block_content_items_serialize_as_blocks` — feed a
+    `UserContent::Blocks` item → recorded line carries the JSON array
+    form.
 
 ## Acceptance Gate
 
