@@ -7,22 +7,41 @@ use crate::error::{Error, Result};
 
 /// Any message the CLI can emit on stdout.
 ///
-/// See `docs/plan/DEVIATIONS.md` for the set of upstream message kinds
-/// (task lifecycle, hook events, rate-limit events) intentionally not
-/// modeled as typed variants yet; they fall through to [`SystemMessage`]
-/// or are skipped, never lost or misparsed.
+/// Upstream models several of these (task lifecycle, hook events,
+/// mirror errors) as `SystemMessage` subclasses so `isinstance(x,
+/// SystemMessage)` keeps working for old call sites; Rust has no
+/// inheritance, so this port gives each its own `Message` variant
+/// instead — no information is lost, callers just match the specific
+/// variant rather than relying on a subtype check.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     /// Echo of user input (also carries tool results in the loop).
     User(UserMessage),
     /// Assistant output: text, thinking, and tool-use blocks.
     Assistant(AssistantMessage),
-    /// CLI lifecycle/system information.
+    /// CLI lifecycle/system information not covered by a more specific
+    /// variant below (includes genuinely unrecognized `system` subtypes,
+    /// forward-compatibly, with the full raw payload in `data`).
     System(SystemMessage),
+    /// A background task started.
+    TaskStarted(TaskStartedMessage),
+    /// A background task reported progress.
+    TaskProgress(TaskProgressMessage),
+    /// A background task completed, failed, or was stopped.
+    TaskNotification(TaskNotificationMessage),
+    /// A background task's lifecycle state changed.
+    TaskUpdated(TaskUpdatedMessage),
+    /// An SDK-synthesized session-store mirroring failure.
+    MirrorError(MirrorErrorMessage),
+    /// A hook lifecycle event (only emitted when `include_hook_events`
+    /// is enabled).
+    HookEvent(HookEventMessage),
     /// Terminal message of a turn, with cost and usage stats.
     Result(ResultMessage),
     /// Raw partial-message stream event (opt-in).
     StreamEvent(StreamEvent),
+    /// Rate limit status changed.
+    RateLimitEvent(RateLimitEvent),
 }
 
 /// Content of a user message: plain text or structured blocks.
@@ -141,6 +160,188 @@ pub struct SystemMessage {
     pub subtype: String,
     /// Full raw payload for fields not modeled explicitly.
     pub data: Value,
+}
+
+/// Task lifecycle statuses considered terminal (the task has finished).
+///
+/// `task_notification` reports the mapped `"stopped"` form; `task_updated`
+/// reports the raw `"killed"` — both are terminal.
+pub const TERMINAL_TASK_STATUSES: &[&str] = &["completed", "failed", "stopped", "killed"];
+
+/// Usage statistics reported in task progress/notification messages.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TaskUsage {
+    /// Total tokens consumed by the task so far.
+    pub total_tokens: u64,
+    /// Number of tool calls made by the task so far.
+    pub tool_uses: u64,
+    /// Task duration so far, in milliseconds.
+    pub duration_ms: u64,
+}
+
+/// Emitted when a background task starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskStartedMessage {
+    /// Always `"task_started"`.
+    pub subtype: String,
+    /// Full raw payload.
+    pub data: Value,
+    /// Task identifier.
+    pub task_id: String,
+    /// Human-readable task description.
+    pub description: String,
+    /// Unique message identifier.
+    pub uuid: String,
+    /// Session identifier.
+    pub session_id: String,
+    /// Tool use id that spawned this task, if any.
+    pub tool_use_id: Option<String>,
+    /// Task kind, e.g. `"background"`.
+    pub task_type: Option<String>,
+}
+
+/// Emitted while a background task is in progress.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskProgressMessage {
+    /// Always `"task_progress"`.
+    pub subtype: String,
+    /// Full raw payload.
+    pub data: Value,
+    /// Task identifier.
+    pub task_id: String,
+    /// Human-readable task description.
+    pub description: String,
+    /// Cumulative usage statistics.
+    pub usage: TaskUsage,
+    /// Unique message identifier.
+    pub uuid: String,
+    /// Session identifier.
+    pub session_id: String,
+    /// Tool use id that spawned this task, if any.
+    pub tool_use_id: Option<String>,
+    /// Name of the most recently used tool, if any.
+    pub last_tool_name: Option<String>,
+}
+
+/// Emitted when a background task completes, fails, or is stopped.
+///
+/// Not every terminal task emits this — some report completion only
+/// via a [`TaskUpdatedMessage`] whose `status` is terminal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskNotificationMessage {
+    /// Always `"task_notification"`.
+    pub subtype: String,
+    /// Full raw payload.
+    pub data: Value,
+    /// Task identifier.
+    pub task_id: String,
+    /// Terminal status: `"completed"`, `"failed"`, or `"stopped"`.
+    pub status: String,
+    /// Path to the task's output file.
+    pub output_file: String,
+    /// Human-readable summary of the outcome.
+    pub summary: String,
+    /// Unique message identifier.
+    pub uuid: String,
+    /// Session identifier.
+    pub session_id: String,
+    /// Tool use id that spawned this task, if any.
+    pub tool_use_id: Option<String>,
+    /// Final usage statistics, when reported.
+    pub usage: Option<TaskUsage>,
+}
+
+/// Emitted when a background task's lifecycle state changes.
+///
+/// `patch` carries the changed fields; when `patch.status` is one of
+/// [`TERMINAL_TASK_STATUSES`] the task has finished. A task stopped via
+/// cancellation may report its terminal state ONLY here (no matching
+/// [`TaskNotificationMessage`]), so callers tracking active task ids
+/// should treat either message's terminal status as clearing the id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskUpdatedMessage {
+    /// Always `"task_updated"`.
+    pub subtype: String,
+    /// Full raw payload.
+    pub data: Value,
+    /// Task identifier.
+    pub task_id: String,
+    /// Changed fields; empty object if the CLI sent no patch or a
+    /// non-object patch — parsing a lifecycle event never fails.
+    pub patch: Value,
+    /// `patch.status`, when present.
+    pub status: Option<String>,
+    /// Session identifier, when present.
+    pub session_id: Option<String>,
+    /// Unique message identifier, when present.
+    pub uuid: Option<String>,
+}
+
+/// Emitted when mirroring a session transcript to an external store
+/// fails. SDK-synthesized — never emitted by the CLI subprocess itself.
+/// Non-fatal: the local-disk transcript is already durable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MirrorErrorMessage {
+    /// Always `"mirror_error"`.
+    pub subtype: String,
+    /// Full raw payload.
+    pub data: Value,
+    /// The session-store key that failed to mirror, kept as raw JSON
+    /// (the session-store subsystem is not otherwise modeled by this
+    /// crate).
+    pub key: Option<Value>,
+    /// Failure description.
+    pub error: String,
+}
+
+/// A hook lifecycle event, emitted only when `include_hook_events` is
+/// enabled on the session options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HookEventMessage {
+    /// `"hook_started"` when a hook begins executing, `"hook_response"`
+    /// when it completes.
+    pub subtype: String,
+    /// Full raw payload, including event-specific fields (e.g. `output`,
+    /// `exit_code`, `outcome` on `"hook_response"`).
+    pub data: Value,
+    /// Name of the hook event (e.g. `"PreToolUse"`).
+    pub hook_event_name: String,
+    /// Session identifier, when present.
+    pub session_id: Option<String>,
+    /// Unique message identifier, when present.
+    pub uuid: Option<String>,
+}
+
+/// Rate limit status reported by the CLI.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RateLimitInfo {
+    /// Current status: `"allowed"`, `"allowed_warning"`, or `"rejected"`.
+    pub status: String,
+    /// Unix timestamp when the rate limit window resets.
+    pub resets_at: Option<i64>,
+    /// Which rate limit window applies (e.g. `"five_hour"`).
+    pub rate_limit_type: Option<String>,
+    /// Fraction of the rate limit consumed (0.0 - 1.0).
+    pub utilization: Option<f64>,
+    /// Status of overage/pay-as-you-go usage, if applicable.
+    pub overage_status: Option<String>,
+    /// Unix timestamp when the overage window resets.
+    pub overage_resets_at: Option<i64>,
+    /// Why overage is unavailable, when `overage_status` is `"rejected"`.
+    pub overage_disabled_reason: Option<String>,
+    /// Full raw payload, including fields not modeled above.
+    pub raw: Value,
+}
+
+/// Emitted when the CLI's rate limit status changes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RateLimitEvent {
+    /// The new rate limit status.
+    pub rate_limit_info: RateLimitInfo,
+    /// Unique message identifier.
+    pub uuid: String,
+    /// Session identifier.
+    pub session_id: String,
 }
 
 /// A tool use deferred by a `PreToolUse` hook returning `"defer"`.
@@ -264,6 +465,7 @@ pub fn parse_message(data: Value) -> Result<Option<Message>> {
         "system" => parse_system_message(&data).map(Some),
         "result" => parse_result_message(&data).map(Some),
         "stream_event" => parse_stream_event(&data).map(Some),
+        "rate_limit_event" => parse_rate_limit_event(&data).map(Some),
         _ => Ok(None),
     }
 }
@@ -339,9 +541,142 @@ fn parse_system_message(data: &Value) -> Result<Message> {
         .get("subtype")
         .and_then(Value::as_str)
         .ok_or_else(|| missing_field(data, "system", "subtype"))?;
-    Ok(Message::System(SystemMessage {
+
+    match subtype {
+        "task_started" => parse_task_started(data, subtype),
+        "task_progress" => parse_task_progress(data, subtype),
+        "task_notification" => parse_task_notification(data, subtype),
+        "task_updated" => Ok(parse_task_updated(data, subtype)),
+        "mirror_error" => Ok(parse_mirror_error(data, subtype)),
+        "hook_started" | "hook_response" => Ok(parse_hook_event(data, subtype)),
+        _ => Ok(Message::System(SystemMessage {
+            subtype: subtype.to_string(),
+            data: data.clone(),
+        })),
+    }
+}
+
+fn parse_task_started(data: &Value, subtype: &str) -> Result<Message> {
+    let missing = |field: &str| missing_field(data, "system", field);
+    Ok(Message::TaskStarted(TaskStartedMessage {
         subtype: subtype.to_string(),
         data: data.clone(),
+        task_id: str_field(data, "task_id").ok_or_else(|| missing("task_id"))?,
+        description: str_field(data, "description").ok_or_else(|| missing("description"))?,
+        uuid: str_field(data, "uuid").ok_or_else(|| missing("uuid"))?,
+        session_id: str_field(data, "session_id").ok_or_else(|| missing("session_id"))?,
+        tool_use_id: str_field(data, "tool_use_id"),
+        task_type: str_field(data, "task_type"),
+    }))
+}
+
+fn parse_task_progress(data: &Value, subtype: &str) -> Result<Message> {
+    let missing = |field: &str| missing_field(data, "system", field);
+    let raw_usage = data.get("usage").ok_or_else(|| missing("usage"))?;
+    let usage =
+        serde_json::from_value(raw_usage.clone()).map_err(|source| Error::MessageParse {
+            message: format!("invalid task usage: {source}"),
+            data: data.clone(),
+        })?;
+    Ok(Message::TaskProgress(TaskProgressMessage {
+        subtype: subtype.to_string(),
+        data: data.clone(),
+        task_id: str_field(data, "task_id").ok_or_else(|| missing("task_id"))?,
+        description: str_field(data, "description").ok_or_else(|| missing("description"))?,
+        usage,
+        uuid: str_field(data, "uuid").ok_or_else(|| missing("uuid"))?,
+        session_id: str_field(data, "session_id").ok_or_else(|| missing("session_id"))?,
+        tool_use_id: str_field(data, "tool_use_id"),
+        last_tool_name: str_field(data, "last_tool_name"),
+    }))
+}
+
+fn parse_task_notification(data: &Value, subtype: &str) -> Result<Message> {
+    let missing = |field: &str| missing_field(data, "system", field);
+    let usage = match data.get("usage") {
+        Some(raw) => {
+            Some(
+                serde_json::from_value(raw.clone()).map_err(|source| Error::MessageParse {
+                    message: format!("invalid task usage: {source}"),
+                    data: data.clone(),
+                })?,
+            )
+        }
+        None => None,
+    };
+    Ok(Message::TaskNotification(TaskNotificationMessage {
+        subtype: subtype.to_string(),
+        data: data.clone(),
+        task_id: str_field(data, "task_id").ok_or_else(|| missing("task_id"))?,
+        status: str_field(data, "status").ok_or_else(|| missing("status"))?,
+        output_file: str_field(data, "output_file").ok_or_else(|| missing("output_file"))?,
+        summary: str_field(data, "summary").ok_or_else(|| missing("summary"))?,
+        uuid: str_field(data, "uuid").ok_or_else(|| missing("uuid"))?,
+        session_id: str_field(data, "session_id").ok_or_else(|| missing("session_id"))?,
+        tool_use_id: str_field(data, "tool_use_id"),
+        usage,
+    }))
+}
+
+fn parse_task_updated(data: &Value, subtype: &str) -> Message {
+    let patch = match data.get("patch") {
+        Some(Value::Object(_)) => data["patch"].clone(),
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    let status = str_field(&patch, "status");
+    Message::TaskUpdated(TaskUpdatedMessage {
+        subtype: subtype.to_string(),
+        data: data.clone(),
+        task_id: str_field(data, "task_id").unwrap_or_default(),
+        patch,
+        status,
+        session_id: str_field(data, "session_id"),
+        uuid: str_field(data, "uuid"),
+    })
+}
+
+fn parse_mirror_error(data: &Value, subtype: &str) -> Message {
+    Message::MirrorError(MirrorErrorMessage {
+        subtype: subtype.to_string(),
+        data: data.clone(),
+        key: data.get("key").cloned(),
+        error: str_field(data, "error").unwrap_or_default(),
+    })
+}
+
+fn parse_hook_event(data: &Value, subtype: &str) -> Message {
+    let hook_event_name = ["hook_event", "hook_name", "hook_event_name"]
+        .into_iter()
+        .find_map(|key| str_field(data, key).filter(|value| !value.is_empty()))
+        .unwrap_or_default();
+    Message::HookEvent(HookEventMessage {
+        subtype: subtype.to_string(),
+        data: data.clone(),
+        hook_event_name,
+        session_id: str_field(data, "session_id"),
+        uuid: str_field(data, "uuid"),
+    })
+}
+
+fn parse_rate_limit_event(data: &Value) -> Result<Message> {
+    let missing = |field: &str| missing_field(data, "rate_limit_event", field);
+    let info = data
+        .get("rate_limit_info")
+        .ok_or_else(|| missing("rate_limit_info"))?;
+    let status = str_field(info, "status").ok_or_else(|| missing("rate_limit_info.status"))?;
+    Ok(Message::RateLimitEvent(RateLimitEvent {
+        rate_limit_info: RateLimitInfo {
+            status,
+            resets_at: info.get("resetsAt").and_then(Value::as_i64),
+            rate_limit_type: str_field(info, "rateLimitType"),
+            utilization: info.get("utilization").and_then(Value::as_f64),
+            overage_status: str_field(info, "overageStatus"),
+            overage_resets_at: info.get("overageResetsAt").and_then(Value::as_i64),
+            overage_disabled_reason: str_field(info, "overageDisabledReason"),
+            raw: info.clone(),
+        },
+        uuid: str_field(data, "uuid").ok_or_else(|| missing("uuid"))?,
+        session_id: str_field(data, "session_id").ok_or_else(|| missing("session_id"))?,
     }))
 }
 
@@ -455,6 +790,16 @@ mod tests {
             "result_minimal" => include_str!("../../tests/fixtures/result_minimal.json"),
             "result_full" => include_str!("../../tests/fixtures/result_full.json"),
             "stream_event" => include_str!("../../tests/fixtures/stream_event.json"),
+            "task_started" => include_str!("../../tests/fixtures/task_started.json"),
+            "task_progress" => include_str!("../../tests/fixtures/task_progress.json"),
+            "task_notification" => {
+                include_str!("../../tests/fixtures/task_notification.json")
+            }
+            "task_updated_terminal" => {
+                include_str!("../../tests/fixtures/task_updated_terminal.json")
+            }
+            "hook_started" => include_str!("../../tests/fixtures/hook_started.json"),
+            "rate_limit_event" => include_str!("../../tests/fixtures/rate_limit_event.json"),
             other => panic!("unknown fixture: {other}"),
         };
         serde_json::from_str(raw).expect("fixture is valid JSON")
@@ -702,7 +1047,7 @@ mod tests {
 
     #[test]
     fn skips_unknown_message_type() {
-        let result = parse_message(serde_json::json!({"type": "rate_limit_event"}));
+        let result = parse_message(serde_json::json!({"type": "some_future_message_type"}));
         assert_eq!(result.expect("does not error"), None);
     }
 
@@ -804,5 +1149,301 @@ mod tests {
         let json = serde_json::to_value(&block).expect("serializes");
         let parsed: ContentBlock = serde_json::from_value(json).expect("deserializes");
         assert_eq!(parsed, block);
+    }
+
+    #[test]
+    fn parses_task_started_message() {
+        let message = parse_message(fixture("task_started"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::TaskStarted(task) = message else {
+            panic!("expected Message::TaskStarted");
+        };
+        assert_eq!(task.task_id, "task-abc");
+        assert_eq!(task.description, "Reticulating splines");
+        assert_eq!(task.uuid, "uuid-1");
+        assert_eq!(task.session_id, "session-1");
+        assert_eq!(task.tool_use_id.as_deref(), Some("toolu_01"));
+        assert_eq!(task.task_type.as_deref(), Some("background"));
+    }
+
+    #[test]
+    fn parses_task_started_message_optional_fields_absent() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": "task-abc",
+            "description": "Working",
+            "uuid": "uuid-1",
+            "session_id": "session-1"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskStarted(task) = message else {
+            panic!("expected Message::TaskStarted");
+        };
+        assert_eq!(task.tool_use_id, None);
+        assert_eq!(task.task_type, None);
+    }
+
+    #[test]
+    fn parses_task_progress_message() {
+        let message = parse_message(fixture("task_progress"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::TaskProgress(task) = message else {
+            panic!("expected Message::TaskProgress");
+        };
+        assert_eq!(task.task_id, "task-abc");
+        assert_eq!(task.usage.total_tokens, 1234);
+        assert_eq!(task.usage.tool_uses, 5);
+        assert_eq!(task.usage.duration_ms, 9876);
+        assert_eq!(task.last_tool_name.as_deref(), Some("Read"));
+    }
+
+    #[test]
+    fn parses_task_notification_message() {
+        let message = parse_message(fixture("task_notification"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::TaskNotification(task) = message else {
+            panic!("expected Message::TaskNotification");
+        };
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.output_file, "/tmp/out.md");
+        assert_eq!(task.summary, "All done");
+        assert!(task.usage.is_some());
+    }
+
+    #[test]
+    fn parses_task_notification_message_optional_fields_absent() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": "task-abc",
+            "status": "failed",
+            "output_file": "/tmp/out.md",
+            "summary": "Boom",
+            "uuid": "uuid-3",
+            "session_id": "session-1"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskNotification(task) = message else {
+            panic!("expected Message::TaskNotification");
+        };
+        assert_eq!(task.status, "failed");
+        assert_eq!(task.usage, None);
+        assert_eq!(task.tool_use_id, None);
+    }
+
+    #[test]
+    fn parses_task_updated_message_terminal() {
+        let message = parse_message(fixture("task_updated_terminal"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.status.as_deref(), Some("completed"));
+        assert!(TERMINAL_TASK_STATUSES.contains(&task.status.as_deref().unwrap()));
+    }
+
+    #[test]
+    fn parses_task_updated_message_minimal() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "b1m21w89v",
+            "patch": {"status": "completed", "end_time": 1_780_405_729_183i64}
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.task_id, "b1m21w89v");
+        assert_eq!(task.status.as_deref(), Some("completed"));
+        assert_eq!(task.uuid, None);
+        assert_eq!(task.session_id, None);
+    }
+
+    #[rstest]
+    #[case("pending")]
+    #[case("running")]
+    #[case("paused")]
+    fn parses_task_updated_message_non_terminal_statuses(#[case] status: &str) {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "task-abc",
+            "patch": {"status": status}
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.status.as_deref(), Some(status));
+        assert!(!TERMINAL_TASK_STATUSES.contains(&status));
+    }
+
+    #[test]
+    fn parses_task_updated_message_no_patch() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "task-abc"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.patch, serde_json::json!({}));
+        assert_eq!(task.status, None);
+    }
+
+    #[rstest]
+    #[case(serde_json::json!("completed"))]
+    #[case(serde_json::json!(["completed"]))]
+    #[case(serde_json::json!(42))]
+    #[case(serde_json::Value::Null)]
+    fn parses_task_updated_message_non_dict_patch(#[case] patch: Value) {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "task-abc",
+            "patch": patch
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.patch, serde_json::json!({}));
+        assert_eq!(task.status, None);
+    }
+
+    #[test]
+    fn parses_task_updated_killed_is_terminal() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": "bs2r8eew4",
+            "patch": {"status": "killed", "end_time": 1_780_405_729_183i64}
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::TaskUpdated(task) = message else {
+            panic!("expected Message::TaskUpdated");
+        };
+        assert_eq!(task.status.as_deref(), Some("killed"));
+        assert!(TERMINAL_TASK_STATUSES.contains(&"killed"));
+    }
+
+    #[test]
+    fn unknown_system_subtype_yields_generic_system_message() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "some_future_subtype",
+            "foo": "bar"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::System(system) = message else {
+            panic!("expected Message::System, not a typed subclass");
+        };
+        assert_eq!(system.subtype, "some_future_subtype");
+        assert_eq!(system.data["foo"], "bar");
+    }
+
+    #[test]
+    fn parses_mirror_error_message() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "mirror_error",
+            "key": {"project_key": "p1", "session_id": "s1"},
+            "error": "connection refused"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::MirrorError(mirror) = message else {
+            panic!("expected Message::MirrorError");
+        };
+        assert_eq!(mirror.error, "connection refused");
+        assert!(mirror.key.is_some());
+    }
+
+    #[test]
+    fn parses_hook_event_message_started() {
+        let message = parse_message(fixture("hook_started"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::HookEvent(hook) = message else {
+            panic!("expected Message::HookEvent");
+        };
+        assert_eq!(hook.subtype, "hook_started");
+        assert_eq!(hook.hook_event_name, "PreToolUse");
+        assert_eq!(hook.session_id.as_deref(), Some("sess-123"));
+        assert_eq!(hook.uuid.as_deref(), Some("uuid-456"));
+    }
+
+    #[test]
+    fn parses_hook_event_message_response() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "hook_response",
+            "hook_event": "PostToolUse",
+            "session_id": "sess-123",
+            "uuid": "uuid-789",
+            "output": "",
+            "exit_code": 0,
+            "outcome": "success"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::HookEvent(hook) = message else {
+            panic!("expected Message::HookEvent");
+        };
+        assert_eq!(hook.subtype, "hook_response");
+        assert_eq!(hook.hook_event_name, "PostToolUse");
+        assert_eq!(hook.data["outcome"], "success");
+    }
+
+    #[test]
+    fn parses_hook_event_message_minimal() {
+        let message = parse_message(serde_json::json!({
+            "type": "system",
+            "subtype": "hook_started",
+            "hook_name": "Stop"
+        }))
+        .expect("parses")
+        .expect("is Some");
+        let Message::HookEvent(hook) = message else {
+            panic!("expected Message::HookEvent");
+        };
+        assert_eq!(hook.hook_event_name, "Stop");
+        assert_eq!(hook.session_id, None);
+        assert_eq!(hook.uuid, None);
+    }
+
+    #[test]
+    fn parses_rate_limit_event() {
+        let message = parse_message(fixture("rate_limit_event"))
+            .expect("parses")
+            .expect("is Some");
+        let Message::RateLimitEvent(event) = message else {
+            panic!("expected Message::RateLimitEvent");
+        };
+        assert_eq!(event.uuid, "abc-123");
+        assert_eq!(event.session_id, "session_xyz");
+        assert_eq!(event.rate_limit_info.status, "allowed_warning");
+        assert_eq!(event.rate_limit_info.resets_at, Some(1_700_000_000));
+        assert_eq!(
+            event.rate_limit_info.rate_limit_type.as_deref(),
+            Some("five_hour")
+        );
+        assert_eq!(event.rate_limit_info.utilization, Some(0.91));
     }
 }

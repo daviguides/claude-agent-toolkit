@@ -8,6 +8,8 @@ pub mod types;
 
 pub use error::{Error, Result};
 pub use types::message::{
-    AssistantMessage, ContentBlock, DeferredToolUse, Message, ResultMessage, StreamEvent,
-    SystemMessage, UserContent, UserMessage, parse_message,
+    AssistantMessage, ContentBlock, DeferredToolUse, HookEventMessage, Message, MirrorErrorMessage,
+    RateLimitEvent, RateLimitInfo, ResultMessage, StreamEvent, SystemMessage,
+    TERMINAL_TASK_STATUSES, TaskNotificationMessage, TaskProgressMessage, TaskStartedMessage,
+    TaskUpdatedMessage, TaskUsage, UserContent, UserMessage, parse_message,
 };

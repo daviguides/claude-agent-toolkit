@@ -32,21 +32,28 @@ confirmed (via upstream's own `tests/test_message_parser.py`) to occur
 in ordinary conversation turns — omitting them would silently drop
 real content, which is a correctness bug, not a scope reduction.
 
-**Explicitly deferred** (not modeled as typed variants in 0.1.0):
-task lifecycle messages, `HookEventMessage`, `MirrorErrorMessage`,
-`RateLimitEvent`. Rationale: each belongs to an entire subsystem
-(background tasks, session-store mirroring, rate-limit monitoring)
-that no phase in this plan sets up scaffolding for, and none are
-exercised by the three reference use cases (refiner/foreman/prisma)
-per `00-overview.md`'s feature list. No data is lost: any `system`
-subtype this port doesn't specifically model falls through to a
-generic `SystemMessage { subtype, data }` carrying the full raw JSON —
-exactly mirroring upstream's own fallback for subtypes IT doesn't
-recognize (see `test_unknown_system_subtype_yields_generic`). A
-`rate_limit_event` top-level message is an unrecognized `"type"` to
-this parser and is skipped (see next point), matching confirmed
-forward-compatible behavior. Revisit if Phase 10's reference-use-case
-audit finds a real dependency on any of these.
+**Update (phase 2b)**: task lifecycle messages, `HookEventMessage`,
+`MirrorErrorMessage`, and `RateLimitEvent` were initially deferred here
+as out of scope. Corrected per repo-owner direction: the upstream
+Python reference repo is the actual source of truth for this port, not
+the plan's original phase sketches — a feature present upstream is not
+"out of scope" just because no phase file mentions it. All four are
+now implemented as full `Message` variants (`TaskStarted`,
+`TaskProgress`, `TaskNotification`, `TaskUpdated`, `MirrorError`,
+`HookEvent`, `RateLimitEvent`), tested against
+`reference/.../tests/test_message_parser.py`'s cases. The only
+remaining gap is a language-level one, not a scope choice: upstream
+models several of these as `SystemMessage` subclasses so
+`isinstance(x, SystemMessage)` keeps matching old call sites; Rust has
+no inheritance, so each gets its own top-level `Message` variant
+instead. No data is lost either way. A `system` subtype this port
+still doesn't specifically recognize (a genuinely new one upstream adds
+later) falls through to a generic `SystemMessage { subtype, data }`
+carrying the full raw JSON — exactly mirroring upstream's own fallback
+for subtypes IT doesn't recognize (see
+`unknown_system_subtype_yields_generic_system_message`). This
+"full-fidelity, defer nothing observed upstream" standard now applies
+to every remaining phase, not just Phase 2.
 
 **Confirmed ⚠️ VERIFY resolution — unknown message type**: the plan's
 sketch guessed unknown types are a parse error. Upstream
