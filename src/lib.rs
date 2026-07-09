@@ -8,6 +8,6 @@ pub mod types;
 
 pub use error::{Error, Result};
 pub use types::message::{
-    AssistantMessage, ContentBlock, Message, ResultMessage, StreamEvent, SystemMessage,
-    UserContent, UserMessage,
+    AssistantMessage, ContentBlock, DeferredToolUse, Message, ResultMessage, StreamEvent,
+    SystemMessage, UserContent, UserMessage, parse_message,
 };
