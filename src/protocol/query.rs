@@ -80,6 +80,10 @@ pub(crate) struct Query {
     id_gen: RequestIdGenerator,
     control_timeout: Duration,
     initialize_timeout: Duration,
+    /// Cached response from the last successful `initialize()` call —
+    /// upstream's `get_server_info()` returns this cached value rather
+    /// than re-fetching.
+    initialization_result: tokio::sync::Mutex<Option<Value>>,
 }
 
 impl Query {
@@ -130,6 +134,7 @@ impl Query {
             id_gen,
             control_timeout,
             initialize_timeout: DEFAULT_CONTROL_TIMEOUT,
+            initialization_result: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -148,16 +153,25 @@ impl Query {
         exclude_dynamic_sections: Option<bool>,
         skills: Option<Vec<String>>,
     ) -> Result<Value> {
-        self.control_request_with_timeout(
-            ControlRequestBody::Initialize {
-                hooks,
-                agents,
-                exclude_dynamic_sections,
-                skills,
-            },
-            self.initialize_timeout,
-        )
-        .await
+        let result = self
+            .control_request_with_timeout(
+                ControlRequestBody::Initialize {
+                    hooks,
+                    agents,
+                    exclude_dynamic_sections,
+                    skills,
+                },
+                self.initialize_timeout,
+            )
+            .await?;
+        *self.initialization_result.lock().await = Some(result.clone());
+        Ok(result)
+    }
+
+    /// Cached response from the last successful `initialize()` call, or
+    /// `None` if it hasn't run yet.
+    pub(crate) async fn server_info(&self) -> Option<Value> {
+        self.initialization_result.lock().await.clone()
     }
 
     /// Sends a control request and awaits its response, using the

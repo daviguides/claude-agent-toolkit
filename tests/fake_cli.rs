@@ -236,3 +236,45 @@ pub fn scripted_with_initialize(lines: &[&str], stderr_lines: &[&str], exit_code
     let _ = writeln!(body, "exit {exit_code}");
     write_script(dir, &body)
 }
+
+/// A fake CLI for tests that need to answer a control request with the
+/// REAL `request_id` the SDK generated — needed whenever the caller
+/// goes through public API (`ClaudeClient::connect`, `query()`) that
+/// always uses the crate's non-deterministic default
+/// `RequestIdGenerator` (no way to pin a deterministic id through
+/// public API, unlike Phase 5's internal `Query::start_with`).
+///
+/// Reads stdin in a loop, records every line, and for each line
+/// matching `*pattern*` extracts its `request_id` (via `sed`) and
+/// prints `response_format` with that id substituted at the format
+/// string's `%s`. Exits with `exit_code` once stdin closes.
+///
+/// # Panics
+///
+/// Panics on test-setup failure (temp dir or script creation).
+#[must_use]
+pub fn dynamic_responding(rules: &[(&str, &str)], exit_code: i32) -> FakeCli {
+    let dir = TempDir::new().expect("create temp dir");
+    let recording_path = dir.path().join("stdin_recording.txt");
+    let recording_path_quoted = shell_single_quote(&recording_path.display().to_string());
+
+    let mut body = String::from("#!/bin/sh\nwhile IFS= read -r line; do\n");
+    let _ = writeln!(
+        body,
+        "  printf '%s\\n' \"$line\" >> {recording_path_quoted}"
+    );
+    body.push_str(
+        "  req_id=$(printf '%s' \"$line\" | sed -n 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/p')\n",
+    );
+    body.push_str("  case \"$line\" in\n");
+    for (pattern, response_format) in rules {
+        let _ = writeln!(
+            body,
+            "    *{pattern}*) printf {} \"$req_id\" ;;",
+            shell_single_quote(&format!("{response_format}\\n"))
+        );
+    }
+    body.push_str("  esac\ndone\n");
+    let _ = writeln!(body, "exit {exit_code}");
+    write_script(dir, &body)
+}

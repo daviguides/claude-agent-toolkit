@@ -3,6 +3,7 @@
 //! Wraps the Claude Code CLI as a subprocess and exposes a typed,
 //! async API for one-shot queries and interactive agent sessions.
 
+mod client;
 mod error;
 mod protocol;
 mod query;
@@ -29,6 +30,7 @@ pub use types::session_store::{
     SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry,
 };
 
+pub use client::ClaudeClient;
 pub use query::{query, query_stream};
 pub use transport::Transport;
 pub use transport::subprocess::{SubprocessTransport, find_cli, full_command_args};

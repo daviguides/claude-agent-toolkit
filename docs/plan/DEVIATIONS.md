@@ -581,3 +581,37 @@ Phase 6**: `_connect_inner` validates `can_use_tool` + string-prompt
 and `can_use_tool` + `permission_prompt_tool_name` combinations.
 `ClaudeAgentOptions.can_use_tool` doesn't exist yet (Phase 8). Nothing
 to validate against yet; noted for Phase 8 to add.
+
+**Two real test-harness hangs found and fixed while writing
+`client_test.rs`** — both are genuine bugs the test run caught, not
+plan-vs-upstream deviations, recorded here because the fix pattern
+matters for any future test in this style:
+1. `set_permission_mode_sends_wire_string`/`set_model_sends_model_name`
+   originally used `scripted_with_initialize` (acks only `initialize`).
+   `Query::set_permission_mode`/`set_model` await a real control
+   response with the default 60s timeout — since nothing ever
+   acknowledged those specific requests, both tests hung for a full
+   minute each before failing. Fixed by switching to
+   `dynamic_responding` with explicit rules for both the `initialize`
+   and the specific outbound subtype under test.
+2. `receive_messages_continues_past_result` called `.collect()` on the
+   raw `receive_messages()` stream. That stream never auto-terminates
+   (matches upstream — only `receive_response()` stops at a `Result`);
+   the fake CLI, after printing its scripted lines, stays alive reading
+   stdin (never closed in this test), so the process never exits and
+   `.collect()` blocked forever. Fixed with `.take(4)` before
+   collecting.
+
+**New fake-CLI harness helper — `dynamic_responding`**: public-API
+tests (`ClaudeClient::connect`, `query()`) always go through the
+crate's default non-deterministic `RequestIdGenerator` — there is no
+way to pin a deterministic id through public API (only Phase 5's
+internal `Query::start_with` allows that, for Phase 5's own
+`pub(crate)`-only tests). `dynamic_responding(rules, exit_code)`
+generalizes `scripted_with_initialize`'s `sed`-based request-id
+extraction to arbitrary rules: each response is a printf format string
+with one `%s`, substituted with the real extracted request_id at
+runtime. Used for `interrupt`/`set_permission_mode`/`set_model`/
+`initialize`-rejection/`server_info` tests — anywhere a test needs a
+control response to actually match whatever id production code
+generated.

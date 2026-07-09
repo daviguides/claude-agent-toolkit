@@ -124,13 +124,26 @@ pub async fn query_stream(
     Ok(message_stream_shared(query))
 }
 
-/// Connects a fresh transport, starts the `Query` actor, and always
-/// runs the `initialize` handshake — upstream does this unconditionally
-/// for both one-shot and streaming-input queries (Phase 3's `hooks`/
-/// `can_use_tool` fields don't exist yet, so `QueryHandlers::default()`
-/// and `hooks: None` are the only values possible today; Phase 8 wires
-/// real handlers through here).
+/// Connects a fresh [`SubprocessTransport`] built from `options`, then
+/// delegates to [`start_and_initialize_over`].
 async fn start_and_initialize(options: ClaudeAgentOptions) -> Result<Query> {
+    let mut transport = SubprocessTransport::new(options.clone());
+    transport.connect().await?;
+    start_and_initialize_over(transport, &options).await
+}
+
+/// Starts the `Query` actor over an already-connected transport and
+/// always runs the `initialize` handshake — upstream does this
+/// unconditionally for one-shot queries, streaming-input queries, AND
+/// `ClaudeClient` sessions alike (Phase 3's `hooks`/`can_use_tool`
+/// fields don't exist yet, so `QueryHandlers::default()` and
+/// `hooks: None` are the only values possible today; Phase 8 wires
+/// real handlers through here). Shared by [`query`], [`query_stream`],
+/// and Phase 7's `ClaudeClient::connect`/`connect_with_transport`.
+pub(crate) async fn start_and_initialize_over(
+    transport: impl Transport + 'static,
+    options: &ClaudeAgentOptions,
+) -> Result<Query> {
     let agents = options
         .agents
         .as_ref()
@@ -155,9 +168,6 @@ async fn start_and_initialize(options: ClaudeAgentOptions) -> Result<Query> {
         Some(SkillsOption::Named(names)) => Some(names.clone()),
         _ => None,
     };
-
-    let mut transport = SubprocessTransport::new(options);
-    transport.connect().await?;
 
     let mut query = Query::start(transport, QueryHandlers::default());
     query.set_initialize_timeout(resolve_initialize_timeout());
