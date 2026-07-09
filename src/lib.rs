@@ -4,6 +4,7 @@
 //! async API for one-shot queries and interactive agent sessions.
 
 mod error;
+mod protocol;
 pub mod transport;
 pub mod types;
 
