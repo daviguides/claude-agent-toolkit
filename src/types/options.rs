@@ -1,14 +1,16 @@
 //! Unified configuration for queries and clients.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::types::hook::{HookEvent, HookMatcher};
 use crate::types::mcp::{McpServersOption, PluginConfig};
-use crate::types::permission::PermissionMode;
+use crate::types::permission::{CanUseToolCallback, PermissionMode};
 use crate::types::session_store::{SessionStore, SessionStoreFlushMode};
 
 /// Default stdout line-buffer limit in bytes (upstream default: 1 MiB).
@@ -317,11 +319,10 @@ pub struct TaskBudget {
     pub total: u64,
 }
 
-/// Configuration for `query()` and `ClaudeClient` (added in later phases).
+/// Configuration for `query()` and `ClaudeClient`.
 ///
 /// Construct with [`ClaudeAgentOptions::builder()`]; [`Default`] gives
-/// upstream-equivalent defaults. `can_use_tool` and `hooks` are added
-/// in Phase 8, once the hook I/O types they depend on exist.
+/// upstream-equivalent defaults.
 // Mirrors upstream's flat `@dataclass ClaudeAgentOptions` exactly: each
 // bool is an independent CLI flag, not combinable state — a state
 // machine would misrepresent the domain.
@@ -414,6 +415,17 @@ pub struct ClaudeAgentOptions {
     pub load_timeout_ms: u64,
     /// API-side task budget in tokens.
     pub task_budget: Option<TaskBudget>,
+    /// Custom permission handler for tool calls that would otherwise
+    /// prompt the user. Requires a streaming-input prompt (rejected
+    /// with a plain-string `query()` prompt) and is mutually exclusive
+    /// with `permission_prompt_tool_name`; when set, this crate
+    /// auto-sets `permission_prompt_tool_name` to `"stdio"` for the
+    /// control protocol, matching upstream.
+    pub can_use_tool: Option<CanUseToolCallback>,
+    /// Hook callbacks for responding to lifecycle events, keyed by
+    /// event. Upstream dispatches multiple matchers registered on the
+    /// same event concurrently, not sequentially.
+    pub hooks: Option<HashMap<HookEvent, Vec<HookMatcher>>>,
 }
 
 impl Default for ClaudeAgentOptions {
@@ -461,6 +473,8 @@ impl Default for ClaudeAgentOptions {
             session_store_flush: SessionStoreFlushMode::default(),
             load_timeout_ms: DEFAULT_LOAD_TIMEOUT_MS,
             task_budget: None,
+            can_use_tool: None,
+            hooks: None,
         }
     }
 }
@@ -516,6 +530,11 @@ impl std::fmt::Debug for ClaudeAgentOptions {
             .field("session_store_flush", &self.session_store_flush)
             .field("load_timeout_ms", &self.load_timeout_ms)
             .field("task_budget", &self.task_budget)
+            .field(
+                "can_use_tool",
+                &callback_marker(self.can_use_tool.is_some()),
+            )
+            .field("hooks", &self.hooks)
             .finish()
     }
 }
@@ -841,6 +860,32 @@ impl ClaudeAgentOptionsBuilder {
     #[must_use]
     pub fn task_budget(mut self, total: u64) -> Self {
         self.options.task_budget = Some(TaskBudget { total });
+        self
+    }
+
+    /// Registers the tool-permission callback. Requires a
+    /// streaming-input prompt; see the field doc on
+    /// [`ClaudeAgentOptions::can_use_tool`].
+    #[must_use]
+    pub fn can_use_tool<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: Fn(crate::types::permission::ToolPermissionRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = crate::types::permission::PermissionResult> + Send + 'static,
+    {
+        self.options.can_use_tool = Some(crate::types::permission::can_use_tool_callback(callback));
+        self
+    }
+
+    /// Registers a hook matcher for `event`, appending to any matchers
+    /// already registered for that event.
+    #[must_use]
+    pub fn hook(mut self, event: HookEvent, matcher: HookMatcher) -> Self {
+        self.options
+            .hooks
+            .get_or_insert_with(HashMap::new)
+            .entry(event)
+            .or_default()
+            .push(matcher);
         self
     }
 }
