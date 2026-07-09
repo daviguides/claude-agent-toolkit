@@ -171,3 +171,90 @@ named test — `max_turns_zero_omits_flag`,
 `Some(0)` or `Some(String::new())` silently omits the flag, exactly as
 it does upstream. `max_budget_usd`, `task_budget`, `effort`, and
 `setting_sources` use `is not None` and so DO emit on zero/empty.
+
+## Phase 4 — Subprocess transport
+
+**Finding — no more one-shot `--print` mode**: `05-phase-4-transport.md`
+sketches a `PromptInput::{Text, Streaming}` enum where `Text` maps to
+`--print <prompt>`. Upstream's actual `SubprocessCLITransport.__init__`
+sets `self._is_streaming = True` unconditionally with the comment
+"Always use streaming mode internally (matching TypeScript SDK)". A
+grep for `--print` across `subprocess_cli.py` finds nothing. This
+already surfaced in Phase 3: `build_cli_args` unconditionally appends
+`--input-format stream-json` at the end, with no branch for a `--print`
+mode — so Phase 3's implementation was already correct against current
+upstream. Phase 4's `PromptInput` enum and the `--print` flag are
+dropped entirely; `SubprocessTransport` is prompt-agnostic. One-shot
+`query()` vs. multi-turn `ClaudeClient` (Phase 6/7) differ only in how
+many messages get written to stdin and when `end_input()` is called —
+never in the CLI invocation itself.
+
+**Finding — `prompt` constructor argument is dead code upstream**:
+`SubprocessCLITransport.__init__(self, prompt, options)` stores
+`self._prompt = prompt` but no method in the class ever reads it back
+— confirmed by grepping `self._prompt` (one hit: the assignment). The
+Rust `SubprocessTransport` therefore takes no prompt parameter at all;
+writing prompt/turn messages is entirely the caller's job via
+`write_line`, matching what upstream actually does at runtime despite
+what the constructor signature implies.
+
+**CLI discovery — bundled-CLI lookup skipped (structural, not a
+gap)**: upstream's `_find_cli()` first checks a `_bundled/claude(.exe)`
+path relative to the installed Python package directory (the npm/pip
+package ships a vendored binary). A Rust crate installed via `cargo`
+has no equivalent packaged-binary directory — there is nothing to
+search. This step is omitted; discovery here is: explicit `cli_path` →
+`claude` on `PATH` → 6 well-known install locations (`~/.npm-global/
+bin/claude`, `/usr/local/bin/claude`, `~/.local/bin/claude`,
+`~/node_modules/.bin/claude`, `~/.yarn/bin/claude`,
+`~/.claude/local/claude` — the plan's sketch listed only 5, missing the
+last one; corrected here).
+
+**`CliNotFound` message enriched to match upstream**: upstream's actual
+message is multi-line and more actionable than Phase 1's original
+short text: it also suggests `export PATH="$HOME/node_modules/.bin:
+$PATH"` and passing `cli_path` via options. `error.rs`'s `Display` impl
+is updated to include this guidance (still passes the original
+`cli_not_found_display_includes_install_hint` test, which only checks
+a substring).
+
+**`Error::Process.stderr` — deliberately richer than upstream, not a
+gap**: upstream's post-EOF exit-code check builds `ProcessError` with
+a HARDCODED placeholder string `"Check stderr output for details"` —
+it does not actually attach captured stderr text to the error; callers
+are expected to have collected stderr themselves via the `stderr`
+callback (confirmed: refiner/foreman keep their own last-50-lines ring
+buffer for this exact reason). Since error message content is not part
+of the wire protocol, this port keeps Phase 4's originally-planned
+behavior instead: the transport maintains its own bounded ring buffer
+of recent stderr lines (independent of whether a caller-supplied
+callback is set) and attaches it to `Error::Process`. This is strictly
+more helpful than upstream, not a functional gap, and does not
+contradict the "upstream is source of truth" standard, which governs
+wire-visible capability, not internal error-message ergonomics.
+
+**Simplified process-shutdown escalation**: upstream's `close()` does
+a three-stage escalation (graceful wait after stdin EOF → SIGTERM →
+wait → SIGKILL) using `anyio` cancel-scope shielding with no direct
+Tokio equivalent, plus a process-wide `atexit` orphan reaper
+(`_ACTIVE_CHILDREN`). This port implements a two-stage version (close
+stdin → bounded graceful wait → force-kill, which on Tokio is
+`Child::start_kill()`, SIGKILL-equivalent on unix / `TerminateProcess`
+on Windows) and does not implement the SIGTERM intermediate step (would
+require the `nix` crate — not in the fixed dependency list — for a
+signal Tokio doesn't expose directly) or the atexit-style global orphan
+reaper (no direct Rust equivalent without additional unsafe global
+state). Revisit if graceful-shutdown data loss (the scenario upstream's
+comment references, issue #625) is observed in practice.
+
+**Best-effort CLI version check ported**: `_check_claude_version()` —
+spawn `claude -v` with a timeout, warn (never error) if below
+`2.0.0` — is ported as `warn_if_cli_version_outdated`, called from
+`connect()`, with all failures swallowed exactly as upstream does.
+
+**Non-JSON stdout lines are skipped, not errors**: `_parse_stdout_line`
+skips blank lines AND lines that don't start with `{` (some CLI builds
+write non-JSON diagnostic lines like `[SandboxDebug] ...` to stdout) —
+only a line that starts with `{` and fails to parse is a
+`JsonDecode` error. Mirrored exactly; the phase-4 spec's sketch only
+mentioned skipping blank lines.
