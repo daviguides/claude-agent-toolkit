@@ -7,9 +7,21 @@ mod error;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use types::mcp::{McpServerConfig, McpServers, McpServersOption, PluginConfig};
 pub use types::message::{
     AssistantMessage, ContentBlock, DeferredToolUse, HookEventMessage, Message, MirrorErrorMessage,
     RateLimitEvent, RateLimitInfo, ResultMessage, StreamEvent, SystemMessage,
     TERMINAL_TASK_STATUSES, TaskNotificationMessage, TaskProgressMessage, TaskStartedMessage,
     TaskUpdatedMessage, TaskUsage, UserContent, UserMessage, parse_message,
+};
+pub use types::options::{
+    AgentDefinition, AgentEffort, ClaudeAgentOptions, ClaudeAgentOptionsBuilder,
+    DEFAULT_LOAD_TIMEOUT_MS, DEFAULT_MAX_BUFFER_SIZE, EffortLevel, SandboxIgnoreViolations,
+    SandboxNetworkConfig, SandboxSettings, SettingSource, SkillsOption, StderrCallback,
+    SystemPrompt, TaskBudget, ThinkingConfig, ThinkingDisplay, ToolsOption, build_cli_args,
+};
+pub use types::permission::PermissionMode;
+pub use types::session_store::{
+    BoxFuture, SessionKey, SessionListSubkeysKey, SessionStore, SessionStoreEntry,
+    SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry,
 };

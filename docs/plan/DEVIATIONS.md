@@ -94,3 +94,80 @@ block types on user-role messages in practice.
 through) rather than a closed Rust enum, matching upstream's own
 unconstrained-`str` treatment — preserves forward compatibility with
 new error kinds the CLI may start emitting.
+
+## Phase 3 — Options and CLI argument builder
+
+**Finding**: `04-phase-3-options.md`'s field table (~22 fields) covers
+roughly half of the actual `@dataclass ClaudeAgentOptions` in the
+pinned upstream `types.py` (~40 fields). Per the full-fidelity standard
+established in phase 2b, every upstream field not already deferred by
+an explicit dependency-ordering reason (see below) is implemented.
+
+**Newly included beyond the original sketch**: `tools` (base tool
+preset), `strict_mcp_config`, `session_id`, `max_budget_usd`,
+`fallback_model`, `betas`, `cli_path`, `include_hook_events`, `skills`,
+`sandbox` (+ nested `SandboxNetworkConfig`/`SandboxIgnoreViolations`),
+`max_thinking_tokens`, `thinking` (+ `ThinkingDisplay`), `effort`,
+`output_format`, `enable_file_checkpointing`, `session_store` (a new
+`SessionStore` trait — hand-rolled boxed-future methods, not
+`async-trait`, per the crate's stated dependency policy — plus
+`SessionKey`/`SessionStoreEntry`/`SessionStoreListEntry`/
+`SessionSummaryEntry`/`SessionListSubkeysKey`/`SessionStoreFlushMode`),
+`session_store_flush`, `load_timeout_ms`, `task_budget`. `AgentDefinition`
+is expanded from the sketch's 4 fields to upstream's full 12
+(`disallowedTools`, `skills`, `memory`, `mcpServers`, `initialPrompt`,
+`maxTurns`, `background`, `effort`, `permissionMode`).
+`PermissionMode` gained `dontAsk`/`auto` (6 variants, not 4).
+`debug_stderr` is the one upstream field NOT ported: it is explicitly
+documented upstream as "Deprecated and no longer read by the
+transport" — a dead field, not a gap.
+
+**Still deferred, unchanged from the original plan** (not a new gap —
+an explicit, already-documented dependency-ordering decision):
+`can_use_tool` and `hooks`. Both need hook I/O types
+(`HookMatcher`, `HookCallback`, `PermissionResult`, etc.) that Phase 8
+defines; adding the fields now would mean typing them against
+placeholders and revising twice.
+
+**Confirmed ⚠️ VERIFY resolutions in `_build_command()`** (all
+diverge from the plan's guesses; upstream wins):
+- `system_prompt`: when unset, upstream ALWAYS emits `--system-prompt ""`
+  (never zero flags). A `Preset` with no `append` emits NO flag at all
+  (not `--system-prompt` with the preset name). A new `File` variant
+  maps to `--system-prompt-file`.
+- `plugins` → repeated `--plugin-dir <path>` per local plugin, NOT a
+  single JSON `--plugins` flag. Only the `local` type exists.
+- `agents` → **no CLI flag at all**. Upstream's own comment: "Agents
+  are always sent via initialize request (matching TypeScript SDK). No
+  --agents CLI flag needed." Delivered via the Phase 5 control
+  protocol instead; the options field exists for structural
+  completeness but `build_cli_args` never touches it.
+- `setting_sources` → single joined `--setting-sources=a,b,c` argument
+  (`=`-joined), not two separate args. An explicit empty list
+  (`Some(vec![])`, meaning "disable filesystem settings") still emits
+  `--setting-sources=` — this is an `is not None` check upstream, not
+  a truthiness check.
+- `skills`: not a CLI flag itself — `"all"` injects a bare `Skill` into
+  `allowed_tools`, a name list injects `Skill(name)` per entry, and
+  `setting_sources` defaults to `[user, project]` when unset. Mirrored
+  as `apply_skills_defaults()`.
+- `mcp_servers` accepts a dict OR a bare path/inline-JSON string
+  (`McpServersOption::Servers` / `::Path`), not just a dict.
+- `user` is not a CLI flag at all — it is an OS-level parameter to the
+  subprocess spawn call itself (like `sudo -u`), consumed by the Phase
+  4 transport, not `build_cli_args`.
+- The CLI is now ALWAYS invoked in streaming-input mode — upstream
+  unconditionally appends `--input-format stream-json` at the end of
+  `_build_command()`, with a comment confirming there is no more
+  `--print <prompt>` one-shot invocation path. This affects Phase 4/6
+  significantly; flagged here so those phases aren't blindsided.
+
+**Python-truthiness quirks mirrored faithfully** (each locked in by a
+named test — `max_turns_zero_omits_flag`,
+`max_budget_usd_zero_still_emits_flag`): several upstream checks are
+`if x:` (falsy on `0`/`""`/`[]`) rather than `is not None`. `max_turns`,
+`model`, `fallback_model`, `permission_prompt_tool_name`, `resume`,
+`session_id`, and `settings` all use the truthy form — an explicit
+`Some(0)` or `Some(String::new())` silently omits the flag, exactly as
+it does upstream. `max_budget_usd`, `task_budget`, `effort`, and
+`setting_sources` use `is not None` and so DO emit on zero/empty.
