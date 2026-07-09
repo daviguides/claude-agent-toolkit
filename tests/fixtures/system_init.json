@@ -1,0 +1,1 @@
+{"type":"system","subtype":"init","cwd":"/home/user/project","session_id":"sess_123","tools":["Read","Bash"],"model":"claude-sonnet-5","permissionMode":"default","apiKeySource":"none"}

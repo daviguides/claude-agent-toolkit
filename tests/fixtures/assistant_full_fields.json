@@ -1,0 +1,1 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}],"model":"claude-sonnet-4-5-20250929","id":"msg_01HRq7YZE3apPqSHydvG77Ve","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}},"session_id":"fdf2d90a-fd9e-4736-ae35-806edd13643f","uuid":"0dbd2453-1209-4fe9-bd51-4102f64e33df"}
