@@ -73,9 +73,18 @@ const SDK_ENTRYPOINT: &str = "sdk-rust";
 fn find_cli(cli_path: Option<&Path>) -> Result<PathBuf> { todo!() }
 ```
 
-Home resolution: `std::env::var_os("HOME")` (unix) — this crate targets
-macOS/Linux first; Windows support is a recorded non-blocker
-(`DEVIATIONS.md`) unless upstream tests demand it.
+Cross-platform requirement (upstream supports Windows — mirror it):
+
+- Home resolution: `std::env::var_os("HOME")` on unix,
+  `USERPROFILE` on Windows (`#[cfg(windows)]`).
+- On Windows, also probe the executable name variants upstream uses
+  (⚠️ VERIFY in `_find_cli()`: `claude.cmd` / `claude.exe` and the
+  npm global prefix under `%APPDATA%\npm`).
+- Keep the discovery function pure (paths + env passed in) so both
+  platforms are unit-testable from any host; CI runs ubuntu + macos,
+  and a `windows-latest` job is added to the CI matrix in Phase 10
+  (build + unit tests only; fake-CLI shell scripts are unix-only, so
+  gate those integration tests with `#[cfg(unix)]`).
 
 ## Deliverable C — `SubprocessTransport`
 
