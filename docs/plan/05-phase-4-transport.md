@@ -117,9 +117,18 @@ pub struct SubprocessTransport {
    `Error::CliConnection` with a message naming the cwd (⚠️ VERIFY —
    upstream raises a dedicated message for bad cwd).
 5. For `Text` mode: drop/close stdin right after spawn.
-6. Spawn a stderr task: read lines, append to an
-   `Arc<Mutex<Vec<String>>>` for use in `ProcessError`, and emit each
-   via `tracing::debug!`.
+6. Spawn a stderr task: read lines and, for EACH line:
+   - append to an `Arc<Mutex<Vec<String>>>` for use in `ProcessError`;
+   - if `options.stderr` is `Some(callback)`, invoke `callback(&line)`
+     (clone the `Arc` into the task). A panicking user callback must
+     not kill the task: wrap the call in
+     `std::panic::catch_unwind(AssertUnwindSafe(...))` and
+     `tracing::warn!` on panic;
+   - emit via `tracing::debug!`.
+
+   This mirrors upstream's `stderr` option and is REQUIRED by the
+   reference use cases (refiner/foreman keep the last 50 stderr lines
+   to enrich their error reports).
 
 ### Reading (`read_messages()`)
 
@@ -217,6 +226,13 @@ this same override is the public "custom CLI path" feature.
     pure) full-command builder: `Text("hi")` → args end with
     `["--print", "hi"]`; `Streaming` → contains
     `["--input-format", "stream-json"]`.
+11. `stderr_callback_receives_each_line` — script writes two stderr
+    lines; options carry a callback pushing into an
+    `Arc<Mutex<Vec<String>>>`; after the stream ends, the vec equals
+    the two lines in order.
+12. `stderr_callback_panic_does_not_break_reading` — callback panics on
+    the first line; scripted stdout messages are still all delivered
+    and the process error/exit path still works.
 
 ## Acceptance Gate
 
