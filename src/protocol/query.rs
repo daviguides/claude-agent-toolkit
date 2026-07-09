@@ -62,11 +62,21 @@ type InflightMap = Arc<StdMutex<HashMap<String, JoinHandle<()>>>>;
 
 /// Owns the transport; runs a background read loop and a background
 /// writer that serializes all stdin access.
+///
+/// `messages`/`driver_task` use `tokio::sync::Mutex` (not a design for
+/// genuine multi-reader contention — exactly one task calls
+/// `next_message`/`close` in practice) purely so those two methods can
+/// take `&self` like every other method here. This lets a caller share
+/// one `Query` between a reading loop and a concurrent input-feeding
+/// task (needed by `query_stream()` in Phase 6, matching upstream's
+/// own concurrent `stream_input` background task) without the whole
+/// `Query` sitting behind one lock — a lock spanning both read and
+/// write would serialize them, defeating the concurrency.
 pub(crate) struct Query {
     outbound: mpsc::UnboundedSender<WriteCommand>,
     pending: PendingMap,
-    messages: mpsc::UnboundedReceiver<Result<Value>>,
-    driver_task: Option<JoinHandle<()>>,
+    messages: tokio::sync::Mutex<mpsc::UnboundedReceiver<Result<Value>>>,
+    driver_task: tokio::sync::Mutex<Option<JoinHandle<()>>>,
     id_gen: RequestIdGenerator,
     control_timeout: Duration,
     initialize_timeout: Duration,
@@ -115,8 +125,8 @@ impl Query {
         Self {
             outbound: outbound_tx,
             pending,
-            messages: messages_rx,
-            driver_task: Some(driver_task),
+            messages: tokio::sync::Mutex::new(messages_rx),
+            driver_task: tokio::sync::Mutex::new(Some(driver_task)),
             id_gen,
             control_timeout,
             initialize_timeout: DEFAULT_CONTROL_TIMEOUT,
@@ -330,17 +340,17 @@ impl Query {
     }
 
     /// Receives the next normal (non-control) message.
-    pub(crate) async fn next_message(&mut self) -> Option<Result<Value>> {
-        self.messages.recv().await
+    pub(crate) async fn next_message(&self) -> Option<Result<Value>> {
+        self.messages.lock().await.recv().await
     }
 
     /// Closes input, terminates the driver task and transport.
-    pub(crate) async fn close(&mut self) -> Result<()> {
+    pub(crate) async fn close(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         if self.outbound.send(WriteCommand::Close(tx)).is_ok() {
             let _ = rx.await;
         }
-        if let Some(task) = self.driver_task.take() {
+        if let Some(task) = self.driver_task.lock().await.take() {
             let _ = task.await;
         }
         Ok(())
@@ -723,7 +733,7 @@ mod tests {
         );
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start(transport, QueryHandlers::default());
+        let query = Query::start(transport, QueryHandlers::default());
 
         let first = query
             .next_message()
@@ -792,7 +802,7 @@ mod tests {
         let fake = fake_cli::responding(&[], &[]);
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start_with(
+        let query = Query::start_with(
             transport,
             QueryHandlers::default(),
             RequestIdGenerator::with_suffix("test"),
@@ -829,7 +839,7 @@ mod tests {
 
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start(transport, handlers);
+        let query = Query::start(transport, handlers);
 
         let recorded = wait_for_recording(&fake.stdin_recording_path).await;
         let line = recorded.lines().next().expect("SDK wrote a response line");
@@ -853,7 +863,7 @@ mod tests {
         );
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start(transport, QueryHandlers::default());
+        let query = Query::start(transport, QueryHandlers::default());
 
         // Subsequent scripted message still flows despite the handler error.
         let next = query
@@ -889,7 +899,7 @@ mod tests {
         );
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start(transport, QueryHandlers::default());
+        let query = Query::start(transport, QueryHandlers::default());
 
         let next = query
             .next_message()
@@ -906,7 +916,7 @@ mod tests {
         let fake = fake_cli::recording(&[], 0);
         let mut transport = transport_for(&fake);
         transport.connect().await.expect("connects");
-        let mut query = Query::start(transport, QueryHandlers::default());
+        let query = Query::start(transport, QueryHandlers::default());
 
         query
             .send_user_message(&UserContent::Text("hello".to_string()), "default")
