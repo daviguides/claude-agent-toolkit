@@ -375,3 +375,84 @@ repro outside the test suite). Fixed by backgrounding the *stdout
 writer* instead and keeping the stdin recorder (`cat > file`) in the
 foreground — the writer doesn't touch stdin, so backgrounding it is
 harmless, and the recorder now correctly inherits the real stdin.
+
+## Phase 6 — Public `query()` API
+
+**Confirmed ⚠️ VERIFY — initialize handshake ALWAYS runs**: the plan's
+sketch guessed one-shot `--print` mode skips `initialize()`. There is
+no `--print` mode at all (Phase 4/5 finding), and
+`_process_query_inner` calls `await query.initialize()`
+unconditionally for both string and async-iterable prompts, with the
+comment "Always initialize to send agents via stdin (matching
+TypeScript SDK)". Ported identically: `query()` always initializes.
+
+**Confirmed — one-shot string prompt is `session_id: ""`, not a
+placeholder**: upstream writes
+`{"type":"user","session_id":"","message":{"role":"user","content":prompt},"parent_tool_use_id":null}`
+— empty string, not `"default"` or similar. Phase 5's
+`send_user_message` test used `"default"` only as an arbitrary example
+value for its own parameter; `query()` itself calls it with `""`.
+
+**Internal-only difference — write path for the one-shot message**:
+upstream writes the one-shot user message via
+`chosen_transport.write()` directly, bypassing `Query`'s own queuing.
+This crate's `Query::start` moves the transport into its driver task
+by the time `start()` returns, so nothing outside `Query` can reach
+the transport directly anymore — `query()` instead calls
+`Query::send_user_message`, which produces the identical wire line
+through the same single-writer channel every other `Query` write
+already goes through. Same bytes on the wire; different internal path,
+required by Rust's ownership model (Python's asyncio has no analogous
+constraint).
+
+**Confirmed — responses genuinely stream concurrently with input
+being fed**: `query.py`'s own docstring says streaming-mode
+"still unidirectional... All prompts are sent, then all responses
+received," which reads as sequential. The actual implementation is
+not: `stream_input(prompt)` is spawned as an independent background
+task (`query.spawn_task(...)`) fully concurrent with the foreground
+`async for data in query.receive_messages()` loop. The docstring is a
+simplified mental model for callers, not a description of the
+implementation. `query_stream()` is built concurrent, matching the
+real behavior (and the phase-6 spec's own test #10 expectation).
+
+**`initialize_timeout` reads an environment variable, with a floor**:
+`CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (milliseconds, default `"60000"`),
+then `max(ms / 1000.0, 60.0)` — the timeout can only be raised above
+60s by the env var, never lowered below it. Ported identically as
+`resolve_initialize_timeout()`.
+
+**No `CLAUDE_AGENT_CLI_PATH`-equivalent env var added**: the plan
+proposed one for test injectability if upstream lacked a mechanism.
+Upstream's `_find_cli()` has no environment-variable lookup at all
+(confirmed by the full Phase 4 read) — but this crate already has
+`ClaudeAgentOptions.cli_path` (a REAL upstream field, ported in Phase
+3, not an extension), which fully satisfies the stated need for
+test/user CLI-path injection. No new env var is introduced.
+
+**`can_use_tool` + string-prompt mutual exclusivity — logic deferred,
+not the validation gap it looks like**: upstream raises if
+`can_use_tool` is set with a string prompt (requires the streaming
+iterable form), and separately if `can_use_tool` and
+`permission_prompt_tool_name` are both set. `ClaudeAgentOptions` has
+no `can_use_tool` field yet — deferred to Phase 8 by design (Phase 3's
+own documented dependency-ordering decision, since the callback type
+needs Phase 8's hook/permission I/O types). There is nothing to
+validate against yet; Phase 8 must add this check when it adds the
+field. Noted here so it isn't forgotten.
+
+**Session-store-specific setup left out of `query()`**: upstream's
+`process_query` also calls `validate_session_store_options`,
+`materialize_resume_session` (loads a resumed session from the store
+into a temp `CLAUDE_CONFIG_DIR`), and `build_mirror_batcher` — all
+part of the session-store subsystem already deferred in Phase 5
+(`TranscriptMirrorBatcher`). `query()` accepts `options.session_store`
+as a value (Phase 3's field) but does not yet wire the load/mirror
+machinery, consistent with that standing deferral.
+
+**Test list correction — no `--print` flag to assert**: the phase-6
+spec's test #6 (`prompt_reaches_cli_via_print_flag`) asserts a
+`--print` CLI argument that no longer exists. Replaced with a test
+asserting the prompt reaches the CLI as a written stdin JSON line
+(`{"type":"user","session_id":"",...}`), which is how the one-shot
+prompt is actually delivered now.
