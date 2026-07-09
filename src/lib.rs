@@ -5,6 +5,7 @@
 
 mod error;
 mod protocol;
+mod query;
 pub mod transport;
 pub mod types;
 
@@ -28,5 +29,6 @@ pub use types::session_store::{
     SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry,
 };
 
+pub use query::{query, query_stream};
 pub use transport::Transport;
 pub use transport::subprocess::{SubprocessTransport, find_cli, full_command_args};

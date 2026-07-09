@@ -189,3 +189,50 @@ pub fn scripted_and_recording(lines: &[&str], exit_code: i32) -> FakeCli {
     let _ = writeln!(body, "exit {exit_code}");
     write_script(dir, &body)
 }
+
+/// A fake CLI for `query()`/`query_stream()` tests: `query()` always
+/// runs the `initialize` handshake first (Phase 6 finding), so a fake
+/// that doesn't answer it makes every test hang until the control
+/// timeout. This variant reads stdin in a loop, records every line to
+/// `stdin_recording_path`, and — the moment it sees a line containing
+/// `"subtype":"initialize"` — extracts that request's `request_id`
+/// (via `sed`, no JSON parsing needed) and replies with a canned
+/// success response before printing `lines` and (if any) `stderr_lines`.
+/// Exits with `exit_code` once stdin closes.
+///
+/// # Panics
+///
+/// Panics on test-setup failure (temp dir or script creation).
+#[must_use]
+pub fn scripted_with_initialize(lines: &[&str], stderr_lines: &[&str], exit_code: i32) -> FakeCli {
+    let dir = TempDir::new().expect("create temp dir");
+    let recording_path = dir.path().join("stdin_recording.txt");
+    let recording_path_quoted = shell_single_quote(&recording_path.display().to_string());
+
+    let mut body = String::from("#!/bin/sh\nwhile IFS= read -r line; do\n");
+    let _ = writeln!(
+        body,
+        "  printf '%s\\n' \"$line\" >> {recording_path_quoted}"
+    );
+    body.push_str("  case \"$line\" in\n");
+    body.push_str("    *'\"subtype\":\"initialize\"'*)\n");
+    body.push_str(
+        "      req_id=$(printf '%s' \"$line\" | sed -n 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/p')\n",
+    );
+    body.push_str(
+        "      printf '{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"%s\",\"response\":{}}}\\n' \"$req_id\"\n",
+    );
+    for line in stderr_lines {
+        body.push_str("      printf '%s\\n' ");
+        body.push_str(&shell_single_quote(line));
+        body.push_str(" >&2\n");
+    }
+    for line in lines {
+        body.push_str("      printf '%s\\n' ");
+        body.push_str(&shell_single_quote(line));
+        body.push('\n');
+    }
+    body.push_str("      ;;\n  esac\ndone\n");
+    let _ = writeln!(body, "exit {exit_code}");
+    write_script(dir, &body)
+}

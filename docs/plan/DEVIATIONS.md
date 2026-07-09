@@ -455,4 +455,55 @@ spec's test #6 (`prompt_reaches_cli_via_print_flag`) asserts a
 `--print` CLI argument that no longer exists. Replaced with a test
 asserting the prompt reaches the CLI as a written stdin JSON line
 (`{"type":"user","session_id":"",...}`), which is how the one-shot
-prompt is actually delivered now.
+prompt is actually delivered now. Test #9
+(`stream_input_uses_streaming_mode_flags`) is dropped rather than
+replaced: it asserted the CLI invocation differs between one-shot and
+streaming-input modes, which no longer applies now that both always
+use the identical always-streaming command — already covered by
+`full_command_args_have_expected_base_and_trailing_flags` in
+`transport_test.rs`.
+
+**Phase 5 revisited — driver never closed the transport on read-loop
+end/error, and `Query` had no cleanup-on-drop**: writing `query()`'s
+message stream surfaced two real gaps in Phase 5's driver: (1) on a
+read error that wasn't a clean process exit, the child could still be
+running when `transport` simply fell out of scope — no explicit
+`close()`/kill, a potential leak; (2) if a caller drops the message
+stream before it naturally ends (e.g. `query()`'s returned stream
+dropped mid-iteration), `Query` had no `Drop` impl, so the driver task
+and its owned transport/child would keep running detached. Both fixed
+in `src/protocol/query.rs`: the driver now calls `transport.close()`
+on every loop-exit path (clean EOF too, for deterministic handle
+release rather than whenever `transport` happens to drop), and `Query`
+gained a best-effort `Drop` that signals the driver to close even
+without an explicit `.close().await`.
+
+**Phase 5 revisited — `next_message`/`close` changed from `&mut self`
+to `&self`**: `query_stream()` needs a reading loop and a concurrent
+input-feeding task to share one `Query` (matching upstream's own
+`stream_input` running as an independent background task — see
+above). `messages`/`driver_task` moved behind `tokio::sync::Mutex` to
+enable this; not a genuine multi-reader-contention design (exactly one
+task calls each in practice), purely a type-system device so every
+`Query` method takes `&self`, letting callers hold one shared
+`Arc<Query>` instead of splitting reader/writer halves.
+
+**`futures::stream::unfold` is not fused by default**: it panics if
+polled again after returning `None`. `query()`/`query_stream()`'s
+returned stream applies `.fuse()` before boxing so callers get the
+ordinary "poll after completion is safe, yields `None`" contract public
+Rust streams are expected to have (caught by the phase-6 spec's own
+test #3, `stream_ends_after_process_exit`, which polls three times).
+
+**New fake-CLI harness helper — `scripted_with_initialize`**: every
+`query()`/`query_stream()` test needs its fake CLI to answer the
+`initialize` handshake (confirmed always-sent, see above) before
+anything else happens, or the call hangs for the full 60s control
+timeout. Added `scripted_with_initialize(lines, stderr_lines,
+exit_code)`: reads stdin in a loop, records every line, and — on
+seeing `"subtype":"initialize"` — extracts that request's
+`request_id` via `sed` (no JSON parsing needed) and replies with a
+canned success before printing the scripted output. Existing
+`scripted`/`recording`/`responding`/`scripted_and_recording` helpers
+are untouched (Phase 5's tests call `Query::start`/`start_with`
+directly and never trigger `initialize`, so they don't need this).
