@@ -146,6 +146,28 @@ Phase 0 clones the upstream repo into `reference/claude-agent-sdk-python`
 a starting sketch. The executor MUST diff it against the upstream file
 listed next to it and follow upstream when they disagree.
 
+## Reference Use Cases (hard requirement — 100% coverage)
+
+Three real projects on this machine consume the Python SDK today and
+define the minimum feature bar. Their SDK-touching modules MUST be
+portable to this crate with no missing capability:
+
+| Project | SDK module |
+|---|---|
+| refiner | `~/work/sources/continuum/tools/orch/refiner/refiner/core/sdk_wrapper.py` |
+| foreman | `~/work/sources/continuum/tools/orch/foreman/foreman/core/sdk_wrapper.py` |
+| prisma backend | `~/work/sources/prisma/backend/src/prisma/agents/claude_runner.py` |
+
+Features they exercise (all covered by phases 2–4 and 7): interactive
+client with multi-query session reuse (`connect`/`query`/
+`receive_messages`/`disconnect`), all message/content-block types,
+every `ResultMessage` metric field, `system_prompt` (plain string AND
+preset+append), `cwd`, `model`, `max_turns`, `permission_mode`,
+`settings`, `allowed_tools`, `add_dirs`, `resume`,
+`include_partial_messages`, **`plugins`**, and the **`stderr` line
+callback**. Phase 10 audits these three files line by line before the
+project may be called done.
+
 ## Working Rules for the Executor
 
 1. **TDD, always**: for every phase, write the listed tests FIRST, watch
