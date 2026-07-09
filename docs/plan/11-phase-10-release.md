@@ -61,6 +61,37 @@ Every row must be ✅ or carry a written justification (e.g. a Python-ism
 with no Rust counterpart). Unjustified gaps = phase not done. Walk
 `types.py` the same way for option fields and hook events.
 
+## Step 10.3b — Reference use-case audit (hard gate)
+
+Read the three reference modules listed in `00-overview.md`
+(refiner/foreman `sdk_wrapper.py`, prisma `claude_runner.py`) line by
+line. For every SDK symbol, option field, message field, and behavior
+they touch, add a row to a "Reference use cases" section of
+`PARITY.md` proving the Rust equivalent exists AND is tested.
+Non-negotiable rows (from the audit already performed during
+planning):
+
+- multi-query session reuse on one connected client, with cumulative
+  `total_cost_usd` semantics across queries (cost is cumulative,
+  `num_turns` is per-query — assert this in a client test with two
+  scripted result messages)
+- `stderr` callback delivering every CLI stderr line
+- `plugins` option reaching the CLI invocation
+- `system_prompt` preset `claude_code` + `append` (exact wire form)
+- `settings` accepting both a file path and an inline JSON string
+- `ResultMessage`: `subtype`, `num_turns`, `total_cost_usd`,
+  `duration_ms`, `duration_api_ms`, `is_error`, `session_id`,
+  `result`, `usage.input_tokens`/`usage.output_tokens` readable
+- `resume`, `add_dirs`, `include_partial_messages`, `max_turns`,
+  `allowed_tools`, `permission_mode`, `cwd`, `model`
+
+As the final proof, write `examples/reference_wrapper.rs`: a compiling
+Rust translation of refiner's `SDKWrapper` core loop (connect → query
+→ typed message loop with tool-call printing → metrics from
+`ResultMessage` → disconnect, with stderr capture). If any line of
+that example cannot be expressed, the gap goes back to the owning
+phase and gets fixed — the project is NOT done with the gap open.
+
 ## Step 10.4 — Documentation polish
 
 1. `lib.rs` crate docs: overview, quick-start example (compiling
@@ -102,7 +133,9 @@ support, any `DEVIATIONS.md` entries needing a decision).
 ## Acceptance Gate (project DONE)
 
 - All Step 10.5 commands green
-- `PARITY.md` complete with zero unjustified gaps
+- `PARITY.md` complete with zero unjustified gaps — INCLUDING the
+  "Reference use cases" section (Step 10.3b) with every row ✅
+- `examples/reference_wrapper.rs` compiles and runs
 - `SMOKE-RESULTS.md` contains real output for all examples
 - README/CLAUDE.md/CHANGELOG updated
 
