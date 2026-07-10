@@ -27,3 +27,21 @@ jobs:
         run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  # Discovery unit tests must pass on every platform; the fake-CLI
+  # integration harness (tests/fake_cli.rs and everything built on it)
+  # is `#[cfg(unix)]`-gated (`#!/bin/sh` scripts), so only `--lib` runs
+  # here, not the full `cargo test` the ubuntu job runs.
+  cross-platform:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --all-targets
+      - name: Unit tests
+        run: cargo test --lib
