@@ -709,13 +709,25 @@ async fn handle_inbound_control_request(
             server_name,
             message,
         } => {
-            let Some(handler) = handlers.sdk_mcp_servers.get(&server_name) else {
-                return Err(Error::ControlProtocol {
-                    message: format!("mcp server '{server_name}' not found"),
-                });
+            // Upstream: an unrecognized server name is a JSON-RPC error
+            // *inside* a successful control response, not a
+            // control-protocol-level error — confirmed against
+            // `_internal/query.py`'s `_handle_sdk_mcp_request`, which
+            // never raises for this case (see `DEVIATIONS.md`).
+            let mcp_response = if let Some(handler) = handlers.sdk_mcp_servers.get(&server_name) {
+                handler(message).await?
+            } else {
+                let id = message.get("id").cloned().unwrap_or(Value::Null);
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32601,
+                        "message": format!("Server '{server_name}' not found"),
+                    },
+                })
             };
-            let response = handler(message).await?;
-            Ok(serde_json::json!({ "mcp_response": response }))
+            Ok(serde_json::json!({ "mcp_response": mcp_response }))
         }
     }
 }

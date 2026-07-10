@@ -12,8 +12,10 @@ use futures::FutureExt;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
-use crate::protocol::query::{CanUseToolHandler, HookHandler, QueryHandlers};
+use crate::mcp_server::SdkMcpServer;
+use crate::protocol::query::{CanUseToolHandler, HookHandler, McpServerHandle, QueryHandlers};
 use crate::types::hook::{ALL_HOOK_EVENTS, HookContext, HookEvent, HookMatcher};
+use crate::types::mcp::{McpServerConfig, McpServersOption};
 use crate::types::options::ClaudeAgentOptions;
 use crate::types::permission::{PermissionUpdate, ToolPermissionRequest};
 
@@ -33,15 +35,44 @@ pub(crate) fn build_query_handlers(options: &ClaudeAgentOptions) -> (QueryHandle
         .clone()
         .map(adapt_can_use_tool_callback);
     let registration = build_hook_registration(options.hooks.as_ref());
+    let sdk_mcp_servers = build_sdk_mcp_handlers(&options.mcp_servers);
 
     (
         QueryHandlers {
             can_use_tool,
             hook_callbacks: registration.handlers,
-            sdk_mcp_servers: HashMap::new(),
+            sdk_mcp_servers,
         },
         registration.payload,
     )
+}
+
+/// Extracts every in-process (`Sdk`) server from `mcp_servers` into the
+/// low-level handler table `Query` dispatches `mcp_message` control
+/// requests against. External server configs (stdio/sse/http) and the
+/// file-path form of `mcp_servers` never produce entries here — the
+/// CLI itself connects to those directly.
+fn build_sdk_mcp_handlers(mcp_servers: &McpServersOption) -> HashMap<String, McpServerHandle> {
+    let McpServersOption::Servers(servers) = mcp_servers else {
+        return HashMap::new();
+    };
+    servers
+        .iter()
+        .filter_map(|(name, config)| match config {
+            McpServerConfig::Sdk(server) => Some((name.clone(), adapt_sdk_server(server.clone()))),
+            McpServerConfig::Stdio { .. }
+            | McpServerConfig::Sse { .. }
+            | McpServerConfig::Http { .. } => None,
+        })
+        .collect()
+}
+
+fn adapt_sdk_server(server: SdkMcpServer) -> McpServerHandle {
+    let server = Arc::new(server);
+    Arc::new(move |message: Value| {
+        let server = Arc::clone(&server);
+        Box::pin(async move { Ok(server.handle_message(&message).await) })
+    })
 }
 
 fn build_hook_registration(

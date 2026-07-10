@@ -1167,7 +1167,7 @@ fn push_tools_args(args: &mut Vec<String>, tools: Option<&ToolsOption>) {
 fn push_mcp_servers_args(args: &mut Vec<String>, mcp_servers: &McpServersOption) {
     match mcp_servers {
         McpServersOption::Servers(servers) if !servers.is_empty() => {
-            let wrapped = serde_json::json!({ "mcpServers": servers });
+            let wrapped = crate::types::mcp::to_cli_config_json(servers);
             args.push("--mcp-config".to_string());
             args.push(wrapped.to_string());
         }

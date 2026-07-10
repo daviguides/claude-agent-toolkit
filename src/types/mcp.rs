@@ -11,12 +11,18 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::mcp_server::SdkMcpServer;
+
 /// External MCP server configurations, keyed by server name.
 pub type McpServers = HashMap<String, McpServerConfig>;
 
 /// The `mcp_servers` option: either inline server configs, or a path
 /// to an MCP config JSON file the CLI reads itself.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// No `PartialEq`: an inline `Sdk` server config holds live `Arc<dyn
+/// Fn>` tool handlers with no sensible equality (see
+/// [`McpServerConfig`]'s doc comment).
+#[derive(Debug, Clone)]
 pub enum McpServersOption {
     /// Inline server configurations.
     Servers(McpServers),
@@ -32,18 +38,20 @@ impl Default for McpServersOption {
 }
 
 /// One MCP server entry in the configuration.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+///
+/// Does not derive `Serialize`/`PartialEq`: the `Sdk` variant holds
+/// live `Arc<dyn Fn>` tool handlers, which implement neither. Wire
+/// serialization goes through [`to_cli_config_json`] instead (see
+/// `DEVIATIONS.md`).
+#[derive(Debug, Clone)]
 pub enum McpServerConfig {
     /// Subprocess (stdio) MCP server.
     Stdio {
         /// Executable to launch.
         command: String,
         /// Arguments.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
         /// Environment variables.
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         env: HashMap<String, String>,
     },
     /// Server-sent-events MCP server.
@@ -51,7 +59,6 @@ pub enum McpServerConfig {
         /// Endpoint URL.
         url: String,
         /// Extra headers.
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         headers: HashMap<String, String>,
     },
     /// Streamable HTTP MCP server.
@@ -59,9 +66,57 @@ pub enum McpServerConfig {
         /// Endpoint URL.
         url: String,
         /// Extra headers.
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         headers: HashMap<String, String>,
     },
+    /// In-process ("sdk") MCP server: tools run inside this process,
+    /// never spawned as an external subprocess. Serializes to the
+    /// wire as the stub `{"type":"sdk","name":...}` — the handler
+    /// table stays SDK-side.
+    Sdk(SdkMcpServer),
+}
+
+/// Wire representation for `--mcp-config`. The sole serialization path
+/// for [`McpServerConfig`] (which cannot derive `Serialize` — see its
+/// doc comment).
+#[must_use]
+pub fn to_cli_config_json(servers: &McpServers) -> Value {
+    let entries: serde_json::Map<String, Value> = servers
+        .iter()
+        .map(|(name, config)| (name.clone(), config.to_config_value()))
+        .collect();
+    serde_json::json!({ "mcpServers": entries })
+}
+
+impl McpServerConfig {
+    fn to_config_value(&self) -> Value {
+        match self {
+            Self::Stdio { command, args, env } => {
+                let mut value = serde_json::json!({"type": "stdio", "command": command});
+                if !args.is_empty() {
+                    value["args"] = serde_json::json!(args);
+                }
+                if !env.is_empty() {
+                    value["env"] = serde_json::json!(env);
+                }
+                value
+            }
+            Self::Sse { url, headers } => {
+                let mut value = serde_json::json!({"type": "sse", "url": url});
+                if !headers.is_empty() {
+                    value["headers"] = serde_json::json!(headers);
+                }
+                value
+            }
+            Self::Http { url, headers } => {
+                let mut value = serde_json::json!({"type": "http", "url": url});
+                if !headers.is_empty() {
+                    value["headers"] = serde_json::json!(headers);
+                }
+                value
+            }
+            Self::Sdk(server) => serde_json::json!({"type": "sdk", "name": server.name}),
+        }
+    }
 }
 
 /// Upstream's `type` field is optional on stdio configs (defaults to
@@ -118,6 +173,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                     headers: http.headers,
                 })
             }
+            "sdk" => Err(de::Error::custom(
+                "sdk mcp servers cannot be deserialized from JSON; construct them with \
+                 create_sdk_mcp_server() instead",
+            )),
             other => Err(de::Error::custom(format!(
                 "unknown mcp server type: {other}"
             ))),
@@ -169,9 +228,28 @@ mod tests {
             url: "https://example.com".to_string(),
             headers: HashMap::new(),
         };
-        let json = serde_json::to_value(&config).expect("serializes");
+        let json = config.to_config_value();
         let parsed: McpServerConfig = serde_json::from_value(json).expect("deserializes");
-        assert_eq!(parsed, config);
+        assert!(
+            matches!(parsed, McpServerConfig::Http { url, .. } if url == "https://example.com")
+        );
+    }
+
+    #[test]
+    fn sdk_config_serializes_as_stub_without_handlers() {
+        let server = crate::mcp_server::create_sdk_mcp_server("calc", "1.0.0", vec![]);
+        let config = McpServerConfig::Sdk(server);
+        assert_eq!(
+            config.to_config_value(),
+            serde_json::json!({"type": "sdk", "name": "calc"})
+        );
+    }
+
+    #[test]
+    fn sdk_config_cannot_be_deserialized() {
+        let value = serde_json::json!({"type": "sdk", "name": "calc"});
+        let result: Result<McpServerConfig, _> = serde_json::from_value(value);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -194,9 +272,9 @@ mod tests {
 
     #[test]
     fn mcp_servers_option_defaults_to_empty_servers() {
-        assert_eq!(
+        assert!(matches!(
             McpServersOption::default(),
-            McpServersOption::Servers(McpServers::new())
-        );
+            McpServersOption::Servers(servers) if servers.is_empty()
+        ));
     }
 }
