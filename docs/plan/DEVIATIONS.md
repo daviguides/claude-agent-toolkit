@@ -699,3 +699,136 @@ can carry a `type` and nothing else. All fields use
 on both the enum (for the `type` tag: `addRules`, `setMode`, etc.) and
 each struct variant's fields (`toolName`, `ruleContent`) reproduces
 `to_dict()`'s exact conditional shape without a custom `Serialize` impl.
+
+## Phase 9 — In-process MCP tools
+
+**Confirmed ⚠️ VERIFY — `initialize`'s `protocolVersion` is hardcoded,
+not echoed**: the plan's sketch guessed the requested `protocolVersion`
+is echoed back. `_internal/query.py`'s `_handle_sdk_mcp_request`
+hardcodes `"protocolVersion": "2024-11-05"` in the `initialize` result
+regardless of what the CLI sent — no read of the request's own
+`params.protocolVersion` anywhere in the method. Ported as a `const
+MCP_PROTOCOL_VERSION: &str = "2024-11-05"`, always returned verbatim.
+
+**Confirmed ⚠️ VERIFY — `notifications/initialized` gets a real
+response, not "no reply"**: the plan's sketch guessed this notification
+gets no response at the control-protocol layer. Upstream's
+`_handle_sdk_mcp_request` returns `{"jsonrpc": "2.0", "result": {}}`
+for this method like any other, and `_handle_control_request`
+unconditionally wraps whatever `_handle_sdk_mcp_request` returns as
+`{"mcp_response": ...}` inside a success control response — there is no
+branch anywhere for "no response". `SdkMcpServer::handle_message`
+therefore returns `Value` (not `Option<Value>` as the plan's sketch
+typed it) and always produces a concrete JSON-RPC response, matching
+`_handle_sdk_mcp_request`'s own `-> dict[str, Any]` signature (never
+`None`).
+
+**Confirmed ⚠️ VERIFY — unknown MCP server name is a JSON-RPC error
+inside a SUCCESS control response, not a control-protocol error**: the
+plan's sketch guessed "Unknown server → error control response".
+Upstream's `_handle_sdk_mcp_request` checks `if server_name not in
+self.sdk_mcp_servers` and returns a normal JSON-RPC error object
+(`{"jsonrpc":"2.0","id":...,"error":{"code":-32601,"message":"Server
+'{name}' not found"}}`) — no exception raised — which the caller then
+wraps as `response_data = {"mcp_response": mcp_response}` and sends via
+the ordinary "send success response" path. Only a genuinely malformed
+request (`_handle_control_request`'s own `if not server_name or not
+mcp_message: raise Exception(...)`, i.e. one or both fields missing
+from the control request itself) produces a control-protocol-level
+error response. `protocol/query.rs`'s `McpMessage` dispatch arm is
+corrected to match: an unrecognized `server_name` builds the JSON-RPC
+error value locally (same code/message) and returns `Ok(...)`, not
+`Err(...)`.
+
+**`SdkMcpServer` stores tools in a `Vec<SdkTool>`, not the plan
+sketch's `HashMap<String, SdkTool>`**: upstream builds `cached_tool_list`
+once, in registration order, and `tools/list` always returns that exact
+cached list — the list's order is part of its behavior, not incidental.
+A `HashMap`-backed store would make `tools/list`'s order unspecified
+across runs, repeating the exact nondeterminism problem Phase 8's hook
+`hook_{i}` ids already hit and fixed (see Phase 8's entry above) for no
+benefit, since the field is private (`tools` has no `pub` in the plan's
+own sketch) — lookup-by-name during `tools/call` is a linear scan over
+what is expected to be a small, human-authored tool list.
+
+**`McpServerConfig` loses its `Serialize`/`PartialEq` derives once the
+`Sdk` variant is added — both replaced deliberately, not silently
+dropped**: adding `Sdk(SdkMcpServer)` (which holds `Arc<dyn Fn>` tool
+handlers) makes a derived `Serialize`/`PartialEq` over the whole enum
+impossible to generate (closures implement neither). Per the plan's own
+fixed choice, serialization is replaced by a dedicated
+`to_cli_config_json(&McpServers) -> Value` function (manually
+reproducing each variant's previous wire shape, including the
+empty-collection `skip_serializing_if` behavior) rather than a manual
+`Serialize` impl. `PartialEq` has no dedicated replacement — comparing
+two live server objects (arbitrary closures) has no sensible
+definition, so it is dropped outright from both `McpServerConfig` and
+the `McpServersOption` enum that wraps it (same policy already applied
+to `ClaudeAgentOptions` in Phase 8 once callbacks were added: drop the
+derive wholesale rather than special-case it). The small number of
+existing tests that compared these types with `assert_eq!` are updated
+to `matches!`/field-level assertions.
+
+**`annotations` (upstream `ToolAnnotations`) kept as raw
+`Option<serde_json::Value>`, not a typed struct — a bounded, deliberate
+gap, not silently dropped**: `SdkMcpTool.annotations` upstream is typed
+`mcp.types.ToolAnnotations | None`, a type from the external `mcp` PyPI
+package (imported via `from mcp.types import ToolAnnotations`) — it is
+not vendored anywhere in this port's pinned `reference/` checkout, and
+this crate has no dependency on any MCP client/server crate (out of
+scope per `vision.md`). Since `_handle_sdk_mcp_request`'s `tools/list`
+handling forwards `tool.annotations.model_dump(exclude_none=True)`
+verbatim under an `annotations` key with no further interpretation by
+this SDK layer, a raw JSON value forwarded the same way loses no
+observable capability — callers can build any shape the real MCP spec
+allows; only compile-time field-name checking for a type this crate
+would have to reverse-engineer from an unvendored dependency is given
+up.
+
+**`_meta`/`anthropic/maxResultSizeChars` NOT ported — bounded, low-value
+gap**: upstream's `_build_meta` attaches a `_meta` key to each
+`tools/list` entry containing `{"anthropic/maxResultSizeChars": N}`
+when `tool_def.annotations.maxResultSizeChars` is set — an
+Anthropic-specific CLI-internal hint (controls a large-tool-result
+storage/spill threshold) piggybacked onto the same external, unvendored
+`ToolAnnotations` object referenced above. This is advisory-only
+CLI-side behavior, not a protocol capability a caller loses access to
+(nothing stops a caller from encoding the same key inside the
+`annotations` raw JSON value if they know upstream's convention);
+omitted rather than guessing at a schema this port cannot verify.
+
+**Unknown tool name in `tools/call` → JSON-RPC code `-32602` (Invalid
+params), not independently verifiable against upstream's exact code**:
+the calling code raises a Python `ValueError` for an unknown tool name,
+but the actual JSON-RPC error code produced for that exception is
+generated deep inside the external `mcp` PyPI package's request-dispatch
+machinery (`mcp.server.lowlevel.server`), not this repo's pinned
+`reference/` checkout — fetching that package's current source (the
+`modelcontextprotocol/python-sdk` repo) did not conclusively resolve
+the exact version/code pinned by this SDK's dependency lock either.
+`-32602` is used as the standards-correct JSON-RPC 2.0 choice ("a valid
+method invoked with an invalid parameter value" — the tool name is the
+invalid parameter), clearly distinct from `-32601` ("method not found",
+used for genuinely unrecognized top-level JSON-RPC methods and unknown
+MCP server names elsewhere in this same file). Documented here rather
+than left as a silent guess.
+
+**Tool-handler panics are caught, matching Phase 8's callback-safety
+pattern**: `tools/call` wraps the user handler invocation in
+`AssertUnwindSafe(...).catch_unwind()` (same pattern already used for
+`can_use_tool`/hook callbacks in `callback_adapters.rs`), converting a
+panic into a JSON-RPC `-32603` (Internal error) response instead of
+crashing the query actor's read loop. Upstream's own equivalent `except
+Exception as e: return {"error": {"code": -32603, ...}}` around the
+handler call is the direct analogue; Rust needs the explicit
+panic-catching machinery Python's exception handling gets for free.
+
+**No Python-style dict/TypedDict `input_schema` shorthand — a harmless,
+already-implied simplification**: upstream's `input_schema: type[T] |
+dict[str, Any]` accepts a `{"param_name": python_type}` shorthand that
+`_build_schema` expands into a full JSON Schema object at server-
+creation time (`_python_type_to_json_schema`). Rust has no runtime type
+reflection to replicate this, and the plan's own fixed `tool()` sketch
+already types `input_schema: Value` (a raw JSON Schema value only) — no
+capability is lost since any JSON Schema achievable via the Python
+shorthand is directly expressible as a `serde_json::json!` literal.
