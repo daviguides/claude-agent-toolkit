@@ -159,6 +159,58 @@ async fn receive_messages_continues_past_result() {
 }
 
 #[tokio::test]
+async fn total_cost_usd_is_cumulative_while_num_turns_is_per_query() {
+    // Reference use-case audit (refiner's SDKWrapper): the CLI reports
+    // `total_cost_usd` as a running total for the whole session, not a
+    // per-query delta — callers compute their own delta by comparing
+    // consecutive ResultMessages. `num_turns`, in contrast, is already
+    // scoped to the query that just finished. Two scripted results on
+    // one connected client prove this crate surfaces both fields
+    // exactly as the CLI reports them, with no reinterpretation.
+    let fake = fake_cli::scripted_with_initialize(
+        &[
+            r#"{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"one"}]}}"#,
+            r#"{"type":"result","subtype":"success","duration_ms":1,"duration_api_ms":1,"is_error":false,"num_turns":2,"session_id":"s","total_cost_usd":0.01}"#,
+            r#"{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"two"}]}}"#,
+            r#"{"type":"result","subtype":"success","duration_ms":1,"duration_api_ms":1,"is_error":false,"num_turns":3,"session_id":"s","total_cost_usd":0.05}"#,
+        ],
+        &[],
+        0,
+    );
+    let mut client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    client.send("first").await.expect("sends");
+    let first: Vec<_> = client
+        .receive_response()
+        .expect("has stream")
+        .collect::<Vec<_>>()
+        .await;
+    let Some(Ok(Message::Result(first_result))) = first.last() else {
+        panic!("expected a Result message, got {first:?}");
+    };
+    assert_eq!(first_result.num_turns, 2);
+    assert_eq!(first_result.total_cost_usd, Some(0.01));
+
+    client.send("second").await.expect("sends");
+    let second: Vec<_> = client
+        .receive_response()
+        .expect("has stream")
+        .collect::<Vec<_>>()
+        .await;
+    let Some(Ok(Message::Result(second_result))) = second.last() else {
+        panic!("expected a Result message, got {second:?}");
+    };
+    // num_turns is per-query, not cumulative.
+    assert_eq!(second_result.num_turns, 3);
+    // total_cost_usd is the CLI's own running session total.
+    assert_eq!(second_result.total_cost_usd, Some(0.05));
+
+    client.disconnect().await.expect("disconnects");
+}
+
+#[tokio::test]
 async fn interrupt_sends_control_request_and_resolves() {
     let fake = fake_cli::dynamic_responding(
         &[
@@ -242,6 +294,185 @@ async fn set_model_sends_model_name() {
 
     let lines = recorded_lines_after_initialize(&fake);
     assert_eq!(lines[0]["request"]["model"], "claude-opus-4-8");
+}
+
+#[tokio::test]
+async fn rewind_files_sends_user_message_id() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "rewind_files",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+        ],
+        0,
+    );
+    let client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    client
+        .rewind_files("msg-uuid-1")
+        .await
+        .expect("rewinds files");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut client = client;
+    client.disconnect().await.expect("disconnects");
+
+    let lines = recorded_lines_after_initialize(&fake);
+    assert_eq!(lines[0]["request"]["user_message_id"], "msg-uuid-1");
+}
+
+#[tokio::test]
+async fn reconnect_mcp_server_sends_server_name() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "mcp_reconnect",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+        ],
+        0,
+    );
+    let client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    client
+        .reconnect_mcp_server("calc")
+        .await
+        .expect("reconnects server");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut client = client;
+    client.disconnect().await.expect("disconnects");
+
+    let lines = recorded_lines_after_initialize(&fake);
+    assert_eq!(lines[0]["request"]["serverName"], "calc");
+}
+
+#[tokio::test]
+async fn toggle_mcp_server_sends_server_name_and_enabled() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "mcp_toggle",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+        ],
+        0,
+    );
+    let client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    client
+        .toggle_mcp_server("calc", false)
+        .await
+        .expect("toggles server");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut client = client;
+    client.disconnect().await.expect("disconnects");
+
+    let lines = recorded_lines_after_initialize(&fake);
+    assert_eq!(lines[0]["request"]["serverName"], "calc");
+    assert_eq!(lines[0]["request"]["enabled"], false);
+}
+
+#[tokio::test]
+async fn stop_task_sends_task_id() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "stop_task",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+        ],
+        0,
+    );
+    let client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    client.stop_task("task-1").await.expect("stops task");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut client = client;
+    client.disconnect().await.expect("disconnects");
+
+    let lines = recorded_lines_after_initialize(&fake);
+    assert_eq!(lines[0]["request"]["task_id"], "task-1");
+}
+
+#[tokio::test]
+async fn get_mcp_status_returns_response_value() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "mcp_status",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"servers":[]}}}"#,
+            ),
+        ],
+        0,
+    );
+    let mut client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    let status = client.get_mcp_status().await.expect("gets mcp status");
+    assert_eq!(status, serde_json::json!({"servers": []}));
+
+    client.disconnect().await.expect("disconnects");
+}
+
+#[tokio::test]
+async fn get_context_usage_returns_response_value() {
+    let fake = fake_cli::dynamic_responding(
+        &[
+            (
+                "initialize",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}"#,
+            ),
+            (
+                "get_context_usage",
+                r#"{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"percentage":42.0}}}"#,
+            ),
+        ],
+        0,
+    );
+    let mut client = ClaudeClient::connect(options_for(&fake))
+        .await
+        .expect("connects");
+
+    let usage = client
+        .get_context_usage()
+        .await
+        .expect("gets context usage");
+    assert_eq!(usage, serde_json::json!({"percentage": 42.0}));
+
+    client.disconnect().await.expect("disconnects");
 }
 
 #[tokio::test]
