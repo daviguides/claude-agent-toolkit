@@ -62,6 +62,7 @@ More complete, runnable examples live in [`examples/`](examples/):
 - [`streaming_client.rs`](examples/streaming_client.rs) — multi-turn session
 - [`tools_and_hooks.rs`](examples/tools_and_hooks.rs) — `can_use_tool` + `PreToolUse` hook
 - [`mcp_calculator.rs`](examples/mcp_calculator.rs) — in-process MCP tools
+- [`reference_wrapper.rs`](examples/reference_wrapper.rs) — a production-shaped wrapper (connect → query loop with tool-call printing → per-query cost/turn metrics → disconnect, with `stderr` capture)
 
 Run any of them with `cargo run --example <name>`.
 
