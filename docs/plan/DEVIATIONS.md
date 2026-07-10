@@ -832,3 +832,36 @@ reflection to replicate this, and the plan's own fixed `tool()` sketch
 already types `input_schema: Value` (a raw JSON Schema value only) — no
 capability is lost since any JSON Schema achievable via the Python
 shorthand is directly expressible as a `serde_json::json!` literal.
+
+## Phase 10 — Parity audit, examples, release prep
+
+**Session listing/query/mutation subsystem — an acknowledged,
+unresolved scope gap, not a false justification**: the exhaustive
+`docs/sync/parity.yaml` walk of `__init__.py`'s exports (Step 10.3)
+surfaced 25 upstream symbols with no Rust equivalent anywhere in this
+port: `list_sessions`, `get_session_info`, `get_session_messages`,
+`list_subagents`, `get_subagent_messages`, `SDKSessionInfo`,
+`SessionMessage`, `InMemorySessionStore`, `fold_session_summary`,
+`project_key_for_directory`, and the `*_from_store` /
+`rename_session` / `tag_session` / `delete_session` / `fork_session`
+(+ `ForkSessionResult`) families built on top of them. All of these
+operate ON a `SessionStore` instance — Phase 3 ported the trait itself
+plus its data types (`SessionKey`, `SessionStoreEntry`,
+`SessionStoreFlushMode`, `SessionStoreListEntry`, `SessionSummaryEntry`,
+`SessionListSubkeysKey`) since `ClaudeAgentOptions.session_store`
+depends on them, and Phase 5 already flagged the related
+`TranscriptMirrorBatcher` write path as a deferred, self-contained
+follow-up — but no phase in this 10-phase plan ever scoped the
+query/listing/mutation *functions* built on top of the trait, and
+Step 10.3b's reference-use-case audit (refiner, foreman, prisma) found
+none of the three real production callers exercise any of them either.
+
+This is recorded as `status: justified_gap` (not `not_ported`) in
+`parity.yaml` because the absence itself is now fully documented and
+deliberate, not accidental — but the underlying capability gap is
+real and, unlike every other `justified_gap` entry in this file, has
+no completed Rust implementation standing behind it. Flagged
+explicitly for the repo owner: this needs a decision (a dedicated
+follow-up phase, or a permanent scope exclusion recorded in
+`docs/foundation/vision.md`) — it is not something this phase resolved
+on its own authority.
