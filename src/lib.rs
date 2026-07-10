@@ -1,7 +1,58 @@
-//! Idiomatic Rust port of the official Claude Agent SDK.
+//! Idiomatic Rust port of the official [Claude Agent SDK][upstream].
 //!
-//! Wraps the Claude Code CLI as a subprocess and exposes a typed,
-//! async API for one-shot queries and interactive agent sessions.
+//! Wraps the `claude` CLI as a subprocess (JSON-over-stdio) and
+//! exposes it as a safe, async, strongly-typed Rust API — the same
+//! wire protocol the official Python/TypeScript SDKs speak, translated
+//! into Rust idioms (the type system over runtime checks, `tokio`
+//! throughout, zero-cost wrappers instead of dynamic dispatch).
+//!
+//! [upstream]: https://github.com/anthropics/claude-agent-sdk-python
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_agent_toolkit::{ClaudeAgentOptions, ContentBlock, Message, query};
+//! use futures::StreamExt;
+//!
+//! # async fn run() -> claude_agent_toolkit::Result<()> {
+//! let mut stream = query("What is 2 + 2?", ClaudeAgentOptions::default()).await?;
+//! while let Some(message) = stream.next().await {
+//!     if let Message::Assistant(assistant) = message? {
+//!         for block in assistant.content {
+//!             if let ContentBlock::Text { text } = block {
+//!                 println!("Claude: {text}");
+//!             }
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! See `examples/` for one-shot queries, an interactive multi-turn
+//! [`ClaudeClient`] session, `can_use_tool`/hook callbacks, and an
+//! in-process MCP tool server.
+//!
+//! # Feature map
+//!
+//! | Capability | Entry point |
+//! |---|---|
+//! | One-shot query | [`query()`] |
+//! | One-shot query, streamed input | [`query_stream()`] |
+//! | Interactive multi-turn session | [`ClaudeClient`] |
+//! | Options (model, tools, sandboxing, ...) | [`ClaudeAgentOptions`] |
+//! | Typed message model | [`Message`], [`ContentBlock`] |
+//! | Tool permission callback | [`ClaudeAgentOptionsBuilder::can_use_tool`] |
+//! | Lifecycle hooks | [`HookEvent`], [`HookMatcher`] |
+//! | In-process MCP tools | [`create_sdk_mcp_server()`], [`tool()`] |
+//! | External MCP servers | [`McpServerConfig`], [`McpServersOption`] |
+//! | Session persistence | [`SessionStore`] |
+//!
+//! # Requirements
+//!
+//! The Claude Code CLI must be installed and authenticated:
+//! `npm install -g @anthropic-ai/claude-code`, then either set
+//! `ANTHROPIC_API_KEY` or run `claude login` once.
 
 mod callback_adapters;
 mod client;
