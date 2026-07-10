@@ -3,6 +3,7 @@
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use serde_json::Value;
 
+use crate::callback_adapters::validate_can_use_tool;
 use crate::error::{Error, Result};
 use crate::protocol::query::Query;
 use crate::query::start_and_initialize_over;
@@ -48,9 +49,18 @@ impl ClaudeClient {
     /// # Errors
     ///
     /// [`Error::CliNotFound`], [`Error::CliConnection`], or
-    /// [`Error::ControlProtocol`] when spawn or the handshake fails.
+    /// [`Error::ControlProtocol`] when spawn or the handshake fails
+    /// (including `can_use_tool`'s mutual-exclusivity checks — see
+    /// `validate_can_use_tool`).
     pub async fn connect(options: ClaudeAgentOptions) -> Result<Self> {
-        let mut transport = SubprocessTransport::new(options.clone());
+        // `ClaudeClient` never takes a string prompt (see the note
+        // above), so `can_use_tool`'s streaming-mode requirement is
+        // always satisfied here.
+        let resolved_permission_prompt_tool_name = validate_can_use_tool(&options, false)?;
+        let mut transport = SubprocessTransport::new(ClaudeAgentOptions {
+            permission_prompt_tool_name: resolved_permission_prompt_tool_name,
+            ..options.clone()
+        });
         transport.connect().await?;
         Self::connect_with_transport(transport, &options).await
     }
@@ -67,7 +77,7 @@ impl ClaudeClient {
         transport: impl Transport + 'static,
         options: &ClaudeAgentOptions,
     ) -> Result<Self> {
-        let query = start_and_initialize_over(transport, options).await?;
+        let query = start_and_initialize_over(transport, options, false).await?;
         Ok(Self { query: Some(query) })
     }
 

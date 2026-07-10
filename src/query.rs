@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 
+use crate::callback_adapters::{build_query_handlers, validate_can_use_tool};
 use crate::error::{Error, Result};
-use crate::protocol::query::{Query, QueryHandlers};
+use crate::protocol::query::Query;
 use crate::transport::Transport;
 use crate::transport::subprocess::SubprocessTransport;
 use crate::types::message::{Message, UserContent, parse_message};
@@ -72,7 +73,7 @@ pub async fn query(
     options: ClaudeAgentOptions,
 ) -> Result<BoxStream<'static, Result<Message>>> {
     let prompt = prompt.into();
-    let query = start_and_initialize(options).await?;
+    let query = start_and_initialize(options, true).await?;
 
     query
         .send_user_message(&UserContent::Text(prompt), ONE_SHOT_SESSION_ID)
@@ -102,7 +103,7 @@ pub async fn query_stream(
     prompts: impl Stream<Item = UserContent> + Send + 'static,
     options: ClaudeAgentOptions,
 ) -> Result<BoxStream<'static, Result<Message>>> {
-    let query = Arc::new(start_and_initialize(options).await?);
+    let query = Arc::new(start_and_initialize(options, false).await?);
 
     let feeder_query = Arc::clone(&query);
     tokio::spawn(async move {
@@ -126,24 +127,38 @@ pub async fn query_stream(
 
 /// Connects a fresh [`SubprocessTransport`] built from `options`, then
 /// delegates to [`start_and_initialize_over`].
-async fn start_and_initialize(options: ClaudeAgentOptions) -> Result<Query> {
-    let mut transport = SubprocessTransport::new(options.clone());
+///
+/// `prompt_is_string` feeds `can_use_tool`'s mutual-exclusivity check
+/// (it requires a streaming prompt, matching upstream); the transport
+/// is built from a clone with `permission_prompt_tool_name` resolved
+/// to the auto-set `"stdio"` value so the CLI invocation carries the
+/// right flag (see `validate_can_use_tool`).
+async fn start_and_initialize(
+    options: ClaudeAgentOptions,
+    prompt_is_string: bool,
+) -> Result<Query> {
+    let resolved_permission_prompt_tool_name = validate_can_use_tool(&options, prompt_is_string)?;
+    let mut transport = SubprocessTransport::new(ClaudeAgentOptions {
+        permission_prompt_tool_name: resolved_permission_prompt_tool_name,
+        ..options.clone()
+    });
     transport.connect().await?;
-    start_and_initialize_over(transport, &options).await
+    start_and_initialize_over(transport, &options, prompt_is_string).await
 }
 
 /// Starts the `Query` actor over an already-connected transport and
 /// always runs the `initialize` handshake — upstream does this
 /// unconditionally for one-shot queries, streaming-input queries, AND
-/// `ClaudeClient` sessions alike (Phase 3's `hooks`/`can_use_tool`
-/// fields don't exist yet, so `QueryHandlers::default()` and
-/// `hooks: None` are the only values possible today; Phase 8 wires
-/// real handlers through here). Shared by [`query`], [`query_stream`],
+/// `ClaudeClient` sessions alike. Shared by [`query`], [`query_stream`],
 /// and Phase 7's `ClaudeClient::connect`/`connect_with_transport`.
 pub(crate) async fn start_and_initialize_over(
     transport: impl Transport + 'static,
     options: &ClaudeAgentOptions,
+    prompt_is_string: bool,
 ) -> Result<Query> {
+    validate_can_use_tool(options, prompt_is_string)?;
+    let (handlers, hooks) = build_query_handlers(options);
+
     let agents = options
         .agents
         .as_ref()
@@ -169,11 +184,11 @@ pub(crate) async fn start_and_initialize_over(
         _ => None,
     };
 
-    let mut query = Query::start(transport, QueryHandlers::default());
+    let mut query = Query::start(transport, handlers);
     query.set_initialize_timeout(resolve_initialize_timeout());
 
     query
-        .initialize(None, agents, exclude_dynamic_sections, skills)
+        .initialize(hooks, agents, exclude_dynamic_sections, skills)
         .await?;
 
     Ok(query)

@@ -3,6 +3,7 @@
 //! Wraps the Claude Code CLI as a subprocess and exposes a typed,
 //! async API for one-shot queries and interactive agent sessions.
 
+mod callback_adapters;
 mod client;
 mod error;
 mod protocol;
@@ -11,6 +12,9 @@ pub mod transport;
 pub mod types;
 
 pub use error::{Error, Result};
+pub use types::hook::{
+    ALL_HOOK_EVENTS, HookCallback, HookContext, HookEvent, HookMatcher, HookOutput, hook_callback,
+};
 pub use types::mcp::{McpServerConfig, McpServers, McpServersOption, PluginConfig};
 pub use types::message::{
     AssistantMessage, ContentBlock, DeferredToolUse, HookEventMessage, Message, MirrorErrorMessage,
@@ -24,7 +28,10 @@ pub use types::options::{
     SandboxNetworkConfig, SandboxSettings, SettingSource, SkillsOption, StderrCallback,
     SystemPrompt, TaskBudget, ThinkingConfig, ThinkingDisplay, ToolsOption, build_cli_args,
 };
-pub use types::permission::PermissionMode;
+pub use types::permission::{
+    CanUseToolCallback, PermissionMode, PermissionResult, PermissionRuleValue, PermissionUpdate,
+    ToolPermissionRequest, can_use_tool_callback,
+};
 pub use types::session_store::{
     BoxFuture, SessionKey, SessionListSubkeysKey, SessionStore, SessionStoreEntry,
     SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry,

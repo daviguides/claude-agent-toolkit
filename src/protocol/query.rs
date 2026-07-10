@@ -664,14 +664,34 @@ async fn handle_inbound_control_request(
 ) -> Result<Value> {
     match body {
         InboundControlRequestBody::CanUseTool {
-            tool_name, input, ..
+            tool_name,
+            input,
+            permission_suggestions,
+            blocked_path,
+            decision_reason,
+            title,
+            display_name,
+            description,
+            tool_use_id,
+            agent_id,
         } => {
             let Some(handler) = handlers.can_use_tool.as_ref() else {
                 return Err(Error::ControlProtocol {
                     message: "canUseTool callback is not provided".to_string(),
                 });
             };
-            handler(tool_name, input, Value::Null).await
+            let mut context = serde_json::Map::new();
+            if let Some(suggestions) = permission_suggestions {
+                context.insert("permission_suggestions".to_string(), suggestions);
+            }
+            insert_opt_string(&mut context, "blocked_path", blocked_path);
+            insert_opt_string(&mut context, "decision_reason", decision_reason);
+            insert_opt_string(&mut context, "title", title);
+            insert_opt_string(&mut context, "display_name", display_name);
+            insert_opt_string(&mut context, "description", description);
+            insert_opt_string(&mut context, "tool_use_id", tool_use_id);
+            insert_opt_string(&mut context, "agent_id", agent_id);
+            handler(tool_name, input, Value::Object(context)).await
         }
         InboundControlRequestBody::HookCallback {
             callback_id,
@@ -697,6 +717,13 @@ async fn handle_inbound_control_request(
             let response = handler(message).await?;
             Ok(serde_json::json!({ "mcp_response": response }))
         }
+    }
+}
+
+/// Inserts `value` into `map` under `key` when present; a no-op on `None`.
+fn insert_opt_string(map: &mut serde_json::Map<String, Value>, key: &str, value: Option<String>) {
+    if let Some(value) = value {
+        map.insert(key.to_string(), Value::String(value));
     }
 }
 
