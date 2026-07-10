@@ -6,6 +6,7 @@
 mod callback_adapters;
 mod client;
 mod error;
+mod mcp_server;
 mod protocol;
 mod query;
 pub mod transport;
@@ -38,6 +39,7 @@ pub use types::session_store::{
 };
 
 pub use client::ClaudeClient;
+pub use mcp_server::{SdkMcpServer, SdkTool, ToolHandler, ToolResult, create_sdk_mcp_server, tool};
 pub use query::{query, query_stream};
 pub use transport::Transport;
 pub use transport::subprocess::{SubprocessTransport, find_cli, full_command_args};
