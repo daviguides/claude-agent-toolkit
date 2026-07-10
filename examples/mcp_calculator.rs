@@ -6,6 +6,13 @@
 //! `mcp__calc__add`/`mcp__calc__multiply` — matching upstream's naming
 //! convention exactly.
 //!
+//! Runs with `cwd` pinned to a fresh temp directory rather than
+//! wherever this binary happens to be invoked from — this is a
+//! general Claude Code session and, depending on your own
+//! `~/.claude/settings.json` permission mode, may act with more
+//! autonomy than you expect; sandboxing `cwd` keeps that blast radius
+//! away from directories that matter.
+//!
 //! Setup: `npm install -g @anthropic-ai/claude-code`, then either set
 //! `ANTHROPIC_API_KEY` or run `claude login` once so the CLI is
 //! authenticated.
@@ -57,7 +64,9 @@ async fn main() -> claude_agent_toolkit::Result<()> {
     };
     map.insert("calc".to_string(), McpServerConfig::Sdk(calculator));
 
+    let sandbox = tempfile::tempdir().expect("create sandbox temp dir");
     let options = ClaudeAgentOptions::builder()
+        .cwd(sandbox.path())
         .mcp_servers(servers)
         .allowed_tools(["mcp__calc__add", "mcp__calc__multiply"])
         .build();

@@ -1,9 +1,23 @@
-//! A `can_use_tool` permission callback that denies `Bash`, plus a
+//! A `can_use_tool` permission callback that denies `Write`, plus a
 //! `PreToolUse` hook that logs every tool name Claude attempts.
 //!
 //! `can_use_tool` requires a connected, streaming-mode session (not a
 //! one-shot string prompt), so this uses [`ClaudeClient`] rather than
 //! [`claude_agent_toolkit::query`].
+//!
+//! Two safety choices worth calling out for anyone adapting this
+//! example:
+//! - `.cwd(...)` is pinned to a fresh temp directory, not the crate's
+//!   own working directory — the whole point is to demonstrate a tool
+//!   call being *denied*, and if it isn't, the session shouldn't be
+//!   able to touch anything that matters.
+//! - `.permission_mode(PermissionMode::Default)` is set explicitly.
+//!   `can_use_tool` is only consulted when the CLI's own permission
+//!   evaluation is ambiguous — a global `~/.claude/settings.json` with
+//!   `"defaultMode": "auto"` (or broad per-tool allow rules) can
+//!   approve a tool before this callback is ever reached, silently
+//!   defeating the demo. Pinning `Default` here avoids inheriting
+//!   whatever mode the running user has configured globally.
 //!
 //! Setup: `npm install -g @anthropic-ai/claude-code`, then either set
 //! `ANTHROPIC_API_KEY` or run `claude login` once so the CLI is
@@ -13,17 +27,21 @@
 
 use claude_agent_toolkit::{
     ClaudeAgentOptions, ClaudeClient, ContentBlock, HookEvent, HookMatcher, HookOutput, Message,
-    PermissionResult, hook_callback,
+    PermissionMode, PermissionResult, hook_callback,
 };
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> claude_agent_toolkit::Result<()> {
+    let sandbox = tempfile::tempdir().expect("create sandbox temp dir");
+
     let options = ClaudeAgentOptions::builder()
+        .cwd(sandbox.path())
+        .permission_mode(PermissionMode::Default)
         .can_use_tool(|request| async move {
-            if request.tool_name == "Bash" {
+            if request.tool_name == "Write" {
                 PermissionResult::Deny {
-                    message: "Bash is disabled in this example".to_string(),
+                    message: "Writing files is disabled in this example".to_string(),
                     interrupt: false,
                 }
             } else {
@@ -48,7 +66,9 @@ async fn main() -> claude_agent_toolkit::Result<()> {
 
     let mut client = ClaudeClient::connect(options).await?;
     client
-        .send("Run `echo hello` in bash, then tell me today's date without using any tools.")
+        .send(
+            "Create a file called hello.txt containing the word 'hi', then tell me what happened.",
+        )
         .await?;
 
     {
