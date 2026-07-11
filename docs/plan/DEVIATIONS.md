@@ -981,3 +981,38 @@ first-prompt extraction, summary folding, Unicode tag sanitization, the
 `InMemorySessionStore` conformance suite, both chain builders, and
 `build_fork_lines`'s edge cases — empty transcript, `up_to_message_id`
 not found, state-leak field stripping, derived-vs-explicit titles).
+
+**Post-landing audit found and fixed 4 real bugs** (an independent
+fork re-verified the implementation against actual upstream source
+rather than trusting the research reports at face value — worth doing
+given the algorithm density here):
+
+1. `summary_entry_to_sdk_info` dropped upstream's `custom_title or
+   ai_title or None` fallback entirely (only read `custom_title`), and
+   didn't treat an empty string the same as absent for any string
+   field — upstream's `x or None` pattern applies broadly. Fixed:
+   `custom_title` now falls back to `ai_title`, and `str_field` filters
+   out empty strings before returning, matching upstream for
+   `git_branch`/`cwd`/`tag` too.
+2. `rename_session`/`rename_session_via_store` stored the raw `title`
+   verbatim with no validation — upstream strips it and rejects an
+   empty-after-trim result (`ValueError`). Fixed: both now trim and
+   return `Error::Session` on an empty result.
+3. `tag_session`/`tag_session_via_store` sanitized in the wrong order
+   (trim-then-sanitize instead of upstream's sanitize-then-trim,
+   `_sanitize_unicode(tag).strip()`) and silently treated an explicit
+   `Some("")` the same as `None` (clearing the tag) — upstream only
+   clears on `None`; an explicit empty/whitespace-only tag raises.
+   Fixed: sanitize-then-trim order corrected, and only `None` clears
+   now — an explicit non-`None` tag that's empty after
+   sanitizing+trimming is rejected.
+4. `build_fork_lines`'s `remap_fork_entry` removed the
+   `logicalParentUuid` key when the original entry had none or it
+   mapped outside the fork's uuid set. Upstream always sets this key
+   via a dict literal (`None`/`null` included) — never omits it. Fixed:
+   the key is now always present, `null` when there's nothing to map.
+
+9 new tests cover these (ai_title fallback, empty-string-as-absent,
+title trimming/rejection for both families, tag order/rejection for
+both families, `logicalParentUuid` always-present). Acceptance gate
+re-verified green after the fixes.

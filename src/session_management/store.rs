@@ -555,11 +555,12 @@ pub async fn get_subagent_messages_from_store(
 }
 
 /// Appends a `custom-title` entry setting `session_id`'s display
-/// title.
+/// title. `title` is trimmed before storing.
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidSessionId`] for a malformed `session_id`.
+/// Returns [`Error::InvalidSessionId`] for a malformed `session_id`,
+/// or [`Error::Session`] if `title` is empty after trimming.
 /// Propagates any adapter-specific error from `store.append`.
 pub async fn rename_session_via_store(
     store: &dyn SessionStore,
@@ -572,6 +573,12 @@ pub async fn rename_session_via_store(
             session_id: session_id.to_string(),
         });
     }
+    let stripped = title.trim();
+    if stripped.is_empty() {
+        return Err(Error::Session {
+            message: "title must be non-empty".to_string(),
+        });
+    }
     let key = SessionKey {
         project_key: project_key_for_directory(directory),
         session_id: session_id.to_string(),
@@ -579,7 +586,7 @@ pub async fn rename_session_via_store(
     };
     let entry = json!({
         "type": "custom-title",
-        "customTitle": title,
+        "customTitle": stripped,
         "sessionId": session_id,
         "uuid": Uuid::new_v4().to_string(),
         "timestamp": iso_now(),
@@ -588,15 +595,17 @@ pub async fn rename_session_via_store(
 }
 
 /// Appends a `tag` entry setting (or, with `tag: None`, clearing)
-/// `session_id`'s tag. The tag is Unicode-sanitized before storing
-/// (sanitized via Unicode NFKC normalization + category stripping) and rejected if sanitizing it away
-/// leaves nothing but whitespace.
+/// `session_id`'s tag. `tag` is sanitized (`sanitize_unicode`) then
+/// trimmed — an explicit `Some("")` (or a tag that sanitizes/trims
+/// down to nothing) is rejected, not treated as clearing; only `None`
+/// clears.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InvalidSessionId`] for a malformed `session_id`, or
-/// [`Error::Session`] when a non-empty tag sanitizes to nothing.
-/// Propagates any adapter-specific error from `store.append`.
+/// [`Error::Session`] when an explicit (non-`None`) tag is empty after
+/// sanitizing and trimming. Propagates any adapter-specific error from
+/// `store.append`.
 pub async fn tag_session_via_store(
     store: &dyn SessionStore,
     session_id: &str,
@@ -611,16 +620,13 @@ pub async fn tag_session_via_store(
     let sanitized = match tag {
         None => String::new(),
         Some(tag) => {
-            let sanitized = sanitize_unicode(tag.trim());
-            if tag.trim().is_empty() {
-                String::new()
-            } else if sanitized.trim().is_empty() {
+            let cleaned = sanitize_unicode(tag).trim().to_string();
+            if cleaned.is_empty() {
                 return Err(Error::Session {
-                    message: "tag sanitizes to an empty string".to_string(),
+                    message: "tag must be non-empty".to_string(),
                 });
-            } else {
-                sanitized
             }
+            cleaned
         }
     };
 
@@ -1119,6 +1125,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_session_via_store_rejects_empty_title() {
+        let store = InMemorySessionStore::new();
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let err = rename_session_via_store(&store, session_id, "   ", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Session { .. }));
+    }
+
+    #[tokio::test]
+    async fn rename_session_via_store_trims_title_before_storing() {
+        let store = InMemorySessionStore::new();
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        rename_session_via_store(&store, session_id, "  Padded  ", None)
+            .await
+            .unwrap();
+        let info = get_session_info_from_store(&store, session_id, None)
+            .await
+            .unwrap()
+            .expect("has info");
+        assert_eq!(info.custom_title.as_deref(), Some("Padded"));
+    }
+
+    #[tokio::test]
     async fn rename_session_via_store_appends_custom_title() {
         let store = InMemorySessionStore::new();
         let session_id = "550e8400-e29b-41d4-a716-446655440000";
@@ -1171,6 +1201,16 @@ mod tests {
         let store = InMemorySessionStore::new();
         let session_id = "550e8400-e29b-41d4-a716-446655440000";
         let err = tag_session_via_store(&store, session_id, Some("\u{200b}"), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Session { .. }));
+    }
+
+    #[tokio::test]
+    async fn tag_session_via_store_rejects_explicit_empty_tag_instead_of_clearing() {
+        let store = InMemorySessionStore::new();
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let err = tag_session_via_store(&store, session_id, Some(""), None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Session { .. }));

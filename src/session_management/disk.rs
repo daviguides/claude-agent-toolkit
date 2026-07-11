@@ -526,29 +526,40 @@ fn append_entry_to_session_file(
 /// Renames a session by appending a `custom-title` entry directly to
 /// its transcript file (no `uuid`/`timestamp` — matches upstream's
 /// disk-path wire shape, distinct from the `_via_store` variant).
+/// `title` is trimmed before storing.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InvalidSessionId`] for a malformed `session_id`,
-/// or [`Error::Session`] if the session file can't be found/written.
+/// or [`Error::Session`] if `title` is empty after trimming, or the
+/// session file can't be found/written.
 pub fn rename_session(session_id: &str, title: &str, directory: Option<&str>) -> Result<()> {
     if !is_valid_session_id(session_id) {
         return Err(Error::InvalidSessionId {
             session_id: session_id.to_string(),
         });
     }
-    let entry = json!({"type": "custom-title", "customTitle": title, "sessionId": session_id});
+    let stripped = title.trim();
+    if stripped.is_empty() {
+        return Err(Error::Session {
+            message: "title must be non-empty".to_string(),
+        });
+    }
+    let entry = json!({"type": "custom-title", "customTitle": stripped, "sessionId": session_id});
     append_entry_to_session_file(session_id, directory, &entry)
 }
 
 /// Tags a session (or, with `tag: None`, clears its tag) by appending
-/// a `tag` entry directly to its transcript file.
+/// a `tag` entry directly to its transcript file. `tag` is sanitized
+/// (`sanitize_unicode`) then trimmed — an explicit `Some("")` (or a
+/// tag that sanitizes/trims down to nothing) is rejected, not treated
+/// as clearing; only `None` clears.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InvalidSessionId`] for a malformed `session_id`,
-/// [`Error::Session`] if a non-empty tag sanitizes to nothing or the
-/// session file can't be found/written.
+/// [`Error::Session`] if an explicit (non-`None`) tag is empty after
+/// sanitizing and trimming, or the session file can't be found/written.
 pub fn tag_session(session_id: &str, tag: Option<&str>, directory: Option<&str>) -> Result<()> {
     if !is_valid_session_id(session_id) {
         return Err(Error::InvalidSessionId {
@@ -557,15 +568,14 @@ pub fn tag_session(session_id: &str, tag: Option<&str>, directory: Option<&str>)
     }
     let sanitized = match tag {
         None => String::new(),
-        Some(tag) if tag.trim().is_empty() => String::new(),
         Some(tag) => {
-            let sanitized = sanitize_unicode(tag.trim());
-            if sanitized.trim().is_empty() {
+            let cleaned = sanitize_unicode(tag).trim().to_string();
+            if cleaned.is_empty() {
                 return Err(Error::Session {
-                    message: "tag sanitizes to an empty string".to_string(),
+                    message: "tag must be non-empty".to_string(),
                 });
             }
-            sanitized
+            cleaned
         }
     };
     let entry = json!({"type": "tag", "tag": sanitized, "sessionId": session_id});
@@ -808,10 +818,11 @@ pub(crate) fn build_fork_lines(
 
 /// Remaps one transcript entry for [`build_fork_lines`]: fresh uuid,
 /// `parentUuid` walked past any `progress`-typed ancestor and remapped,
-/// `logicalParentUuid` remapped (or dropped, if it pointed outside the
-/// mapped set), fork bookkeeping fields set, state-leak fields
-/// stripped, and — only for the last written entry — a fresh
-/// timestamp.
+/// `logicalParentUuid` remapped (always present in the output, as
+/// `null` when absent or pointing outside the mapped set — upstream's
+/// dict literal never omits the key), fork bookkeeping fields set,
+/// state-leak fields stripped, and — only for the last written entry —
+/// a fresh timestamp.
 fn remap_fork_entry(
     entry: &Value,
     transcript: &[Value],
@@ -864,18 +875,17 @@ fn remap_fork_entry(
         new_parent.map_or(Value::Null, |p| json!(p)),
     );
 
-    match entry
+    // Upstream always sets this key (via a dict literal), `None`/`null`
+    // included, whether the original entry had one or not — never
+    // omits it.
+    let new_logical_parent = entry
         .get("logicalParentUuid")
         .and_then(Value::as_str)
-        .and_then(|parent| uuid_mapping.get(parent))
-    {
-        Some(new_logical_parent) => {
-            object.insert("logicalParentUuid".to_string(), json!(new_logical_parent));
-        }
-        None => {
-            object.remove("logicalParentUuid");
-        }
-    }
+        .and_then(|parent| uuid_mapping.get(parent));
+    object.insert(
+        "logicalParentUuid".to_string(),
+        new_logical_parent.map_or(Value::Null, |p| json!(p)),
+    );
 
     object.insert("sessionId".to_string(), json!(forked_session_id));
     object.insert("isSidechain".to_string(), Value::Bool(false));
@@ -1042,5 +1052,59 @@ mod tests {
         assert!(get_session_info(session_id, Some("/some/project")).is_none());
 
         crate::session_management::paths::set_test_projects_dir_override(None);
+    }
+
+    #[test]
+    fn rename_session_rejects_empty_title() {
+        let temp = tempfile::tempdir().unwrap();
+        crate::session_management::paths::set_test_projects_dir_override(Some(
+            temp.path().to_path_buf(),
+        ));
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let err = rename_session(session_id, "   ", Some("/some/project")).unwrap_err();
+        assert!(matches!(err, Error::Session { .. }));
+        crate::session_management::paths::set_test_projects_dir_override(None);
+    }
+
+    #[test]
+    fn rename_session_trims_title_before_storing() {
+        let temp = tempfile::tempdir().unwrap();
+        crate::session_management::paths::set_test_projects_dir_override(Some(
+            temp.path().to_path_buf(),
+        ));
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        rename_session(session_id, "  Padded Title  ", Some("/some/project")).unwrap();
+        let info = get_session_info(session_id, Some("/some/project")).expect("has info");
+        assert_eq!(info.custom_title.as_deref(), Some("Padded Title"));
+        crate::session_management::paths::set_test_projects_dir_override(None);
+    }
+
+    #[test]
+    fn tag_session_rejects_explicit_empty_tag_instead_of_clearing() {
+        let temp = tempfile::tempdir().unwrap();
+        crate::session_management::paths::set_test_projects_dir_override(Some(
+            temp.path().to_path_buf(),
+        ));
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let err = tag_session(session_id, Some(""), Some("/some/project")).unwrap_err();
+        assert!(matches!(err, Error::Session { .. }));
+        crate::session_management::paths::set_test_projects_dir_override(None);
+    }
+
+    #[test]
+    fn build_fork_lines_always_includes_logical_parent_uuid_key() {
+        let entries = vec![
+            json!({"type": "user", "uuid": "u1", "parentUuid": null, "message": {"content": "hi"}}),
+        ];
+        let lines = build_fork_lines(&entries, "src", "fork", None, None, || None).unwrap();
+        // No logicalParentUuid on the original entry -> present as null,
+        // never omitted (matches upstream's dict-literal construction).
+        assert_eq!(lines[0]["logicalParentUuid"], serde_json::Value::Null);
+        assert!(
+            lines[0]
+                .as_object()
+                .unwrap()
+                .contains_key("logicalParentUuid")
+        );
     }
 }

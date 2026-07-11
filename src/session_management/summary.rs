@@ -257,15 +257,25 @@ pub(crate) fn summary_entry_to_sdk_info(
         return None;
     }
 
-    let str_field = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_string);
-    let custom_title = str_field("custom_title");
+    // Mirrors upstream's `x or None` pattern applied to every string
+    // field read back out of the summary bag: an empty string is
+    // never a meaningful value here, so it's treated the same as
+    // absent.
+    let str_field = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    // `custom_title` falls back to `ai_title` (session_summary.py:189:
+    // `data.get("custom_title") or data.get("ai_title") or None`).
+    let custom_title = str_field("custom_title").or_else(|| str_field("ai_title"));
     let first_prompt = str_field("first_prompt").or_else(|| str_field("command_fallback"));
     let summary = custom_title
         .clone()
         .or_else(|| str_field("last_prompt"))
         .or_else(|| str_field("summary_hint"))
-        .or_else(|| first_prompt.clone())
-        .filter(|summary| !summary.is_empty())?;
+        .or_else(|| first_prompt.clone())?;
 
     Some(SDKSessionInfo {
         session_id: entry.session_id.clone(),
@@ -470,6 +480,30 @@ mod tests {
         let info = summary_entry_to_sdk_info(&entry, None).expect("has summary");
         assert_eq!(info.summary, "My Session");
         assert_eq!(info.first_prompt.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn summary_entry_to_sdk_info_falls_back_to_ai_title() {
+        let entry = SessionSummaryEntry {
+            session_id: "sess".to_string(),
+            mtime: 1,
+            data: json!({"ai_title": "AI-derived title"}),
+        };
+        let info = summary_entry_to_sdk_info(&entry, None).expect("has summary");
+        assert_eq!(info.custom_title.as_deref(), Some("AI-derived title"));
+        assert_eq!(info.summary, "AI-derived title");
+    }
+
+    #[test]
+    fn summary_entry_to_sdk_info_treats_empty_strings_as_absent() {
+        let entry = SessionSummaryEntry {
+            session_id: "sess".to_string(),
+            mtime: 1,
+            data: json!({"first_prompt": "hi", "git_branch": "", "tag": ""}),
+        };
+        let info = summary_entry_to_sdk_info(&entry, None).expect("has summary");
+        assert_eq!(info.git_branch, None);
+        assert_eq!(info.tag, None);
     }
 
     #[test]
