@@ -47,6 +47,7 @@
 //! | In-process MCP tools | [`create_sdk_mcp_server()`], [`tool()`] |
 //! | External MCP servers | [`McpServerConfig`], [`McpServersOption`] |
 //! | Session persistence | [`SessionStore`] |
+//! | Session listing/rename/tag/fork | [`list_sessions()`], [`rename_session()`], [`fork_session()`] |
 //!
 //! # Requirements
 //!
@@ -60,6 +61,7 @@ mod error;
 mod mcp_server;
 mod protocol;
 mod query;
+mod session_management;
 pub mod transport;
 pub mod types;
 
@@ -92,5 +94,14 @@ pub use types::session_store::{
 pub use client::ClaudeClient;
 pub use mcp_server::{SdkMcpServer, SdkTool, ToolHandler, ToolResult, create_sdk_mcp_server, tool};
 pub use query::{query, query_stream};
+pub use session_management::{
+    ForkSessionResult, InMemorySessionStore, SDKSessionInfo, SessionMessage, delete_session,
+    delete_session_via_store, fold_session_summary, fork_session, fork_session_via_store,
+    get_session_info, get_session_info_from_store, get_session_messages,
+    get_session_messages_from_store, get_subagent_messages, get_subagent_messages_from_store,
+    import_session_to_store, list_sessions, list_sessions_from_store, list_subagents,
+    list_subagents_from_store, project_key_for_directory, rename_session, rename_session_via_store,
+    tag_session, tag_session_via_store,
+};
 pub use transport::Transport;
 pub use transport::subprocess::{SubprocessTransport, find_cli, full_command_args};

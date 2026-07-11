@@ -78,6 +78,24 @@ pub enum Error {
         /// The unimplemented operation's name.
         operation: String,
     },
+
+    /// A session-management mutation (rename/tag/delete/fork) was given
+    /// a session id that is not a valid UUID.
+    #[error("invalid session id: {session_id}")]
+    InvalidSessionId {
+        /// The offending session id.
+        session_id: String,
+    },
+
+    /// A session-management operation failed for a reason other than
+    /// invalid input — e.g. a store implements neither `list_sessions`
+    /// nor `list_session_summaries`, or a fork's `up_to_message_id`
+    /// was not found in the source transcript.
+    #[error("session error: {message}")]
+    Session {
+        /// Human-readable failure description.
+        message: String,
+    },
 }
 
 fn cli_not_found_message(searched_path: Option<&PathBuf>) -> String {

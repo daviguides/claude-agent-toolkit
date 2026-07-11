@@ -865,3 +865,119 @@ explicitly for the repo owner: this needs a decision (a dedicated
 follow-up phase, or a permanent scope exclusion recorded in
 `docs/foundation/vision.md`) — it is not something this phase resolved
 on its own authority.
+
+**Update — repo owner requested implementation; all 25 symbols now
+ported** (`src/session_management.rs` + submodules `disk.rs`/`store.rs`/
+`summary.rs`/`paths.rs`/`unicode_sanitize.rs`/`iso8601.rs`). The 25
+symbols split into two architecturally distinct families, confirmed by
+a dedicated research pass over `sessions.py` (1925 lines),
+`session_mutations.py` (962 lines), `session_summary.py`, and
+`session_store.py`:
+
+- **`_from_store`/`_via_store` family** (9 functions +
+  `InMemorySessionStore` + the pure helpers `fold_session_summary`/
+  `project_key_for_directory`): built entirely on the `SessionStore`
+  trait Phase 3 already shipped. `InMemorySessionStore` is a faithful
+  port of upstream's own reference adapter (in-process `HashMap`s for
+  entries/mtimes/summaries, a monotonic millisecond clock so
+  back-to-back appends never collide, cascading delete, prefix-scanned
+  `list_subkeys`).
+- **Direct-local-disk family** (`list_sessions`, `get_session_info`,
+  `get_session_messages`, `list_subagents`, `get_subagent_messages`,
+  `rename_session`, `tag_session`, `delete_session`, `fork_session`,
+  `import_session_to_store`): reads/writes the same
+  `~/.claude/projects/<sanitized>/...` JSONL files the CLI itself
+  writes, replicating CLI-internal conventions rather than any part of
+  the wire protocol this crate otherwise wraps.
+
+**Confirmed ⚠️ VERIFY resolutions, ported exactly**:
+- `_simple_hash`: a 32-bit rolling hash (`h = (h<<5)-h+char`, masked to
+  32 bits with JS-style signed wraparound), base36-encoded — used only
+  once a sanitized path name exceeds 200 characters, appended as a
+  `-<hash>` suffix on the 200-char prefix (not the full name).
+- `_extract_first_prompt_from_head`'s skip conditions
+  (`isMeta`/`isCompactSummary`/`tool_result`-carrying content, a
+  `<command-name>…</command-name>` slash-command fallback that never
+  wins over a real prompt, and a `_SKIP_FIRST_PROMPT_PATTERN` regex for
+  IDE-injected/interrupt markers) and its 200-Unicode-scalar-value
+  truncation (`rstrip()` then append `…`, no truncation/ellipsis when
+  already short enough) are ported verbatim into
+  `session_management::summary` — shared between the store family
+  (operating on parsed entries) and the disk family (operating on raw
+  JSONL lines, with fast substring pre-filters before `serde_json`
+  parsing, mirroring upstream's own perf-motivated pre-filter).
+- `_sanitize_unicode` (session tags): NFKC normalize → strip
+  Format/PrivateUse/Unassigned Unicode general categories → strip an
+  explicit zero-width/BOM/directional-mark/private-use range set,
+  iterated to a fixed point or 10 rounds, whichever comes first.
+- `_build_fork_lines`: one shared transform
+  (`session_management::disk::build_fork_lines`) called by both
+  `fork_session` and `fork_session_via_store`, exactly as upstream
+  shares it — fresh uuid per entry (including `progress`-typed ones,
+  needed to walk the parent chain), `progress` entries dropped from the
+  *written* output only after the chain is rebuilt, `parentUuid`
+  walked past any `progress` ancestor, `logicalParentUuid` remapped or
+  dropped (never left stale) if it pointed outside the mapped set, a
+  fresh timestamp on only the last written entry, `teamName`/
+  `agentName`/`slug`/`sourceToolAssistantUUID` stripped, and a final
+  `custom-title` entry titled explicitly or derived
+  (`<derived> (fork)`, falling back to the literal `"Forked session"`
+  when nothing is derivable).
+- Wire-shape asymmetry confirmed and preserved: the disk-path
+  `rename_session`/`tag_session` append a 3-key entry
+  (`type`/`customTitle-or-tag`/`sessionId`, no `uuid`/`timestamp`); the
+  `_via_store` siblings append 5 keys (adding `uuid` + `timestamp`).
+  Neither carries a `parentUuid` — both are metadata-only entries, not
+  part of the `user`/`assistant` chain.
+- `list_sessions`/`list_sessions_from_store`'s `limit=0` means
+  "unlimited," not "return nothing" (upstream's `is not None and > 0`
+  check, not a truthiness check) — same Python-truthiness-quirk
+  standard already established in Phase 3, re-verified here with a
+  named test (`list_sessions_from_store_limit_zero_means_unlimited`).
+- An unknown MCP-style edge case here too: a tag line is matched by an
+  exact `{"type":"tag"` *prefix* scan, not a substring search — so a
+  `tool_use` input that happens to contain a `"tag"` field (e.g. a
+  `git tag`/Docker invocation) never gets misread as a session tag.
+
+**One deliberate, bounded simplification**: `_build_conversation_chain`'s
+multi-leaf/terminal-hunting algorithm is ported with index-based
+lookups (`HashMap<uuid, index>` into the transcript slice) rather than
+upstream's pointer/object-identity-based walk — semantically identical
+(same terminal-detection, same main-vs-any-leaf preference, same
+highest-file-order-wins tie-break, same cycle protection via a
+visited-set), just expressed in terms the Rust ownership model prefers
+over shared mutable graph nodes.
+
+**Rust-specific plumbing decisions, none upstream-visible**: `unsafe_code
+= "forbid"` (already a crate-wide policy) rules out
+`std::env::set_var`/`remove_var` for pointing `projects_dir()` at a
+test's temp directory (both require `unsafe` since edition 2024) — a
+`#[cfg(test)]` thread-local override
+(`paths::set_test_projects_dir_override`) sidesteps both the global
+mutable state and the `unsafe` block; safe since every disk-family test
+using it is a plain `#[test]`, never a multi-threaded `#[tokio::test]`,
+so the override never needs to cross OS threads. Also: the write paths
+(`rename_session`/`tag_session`/`fork_session`) needed a
+`resolve_or_create_project_dir` distinct from the read paths'
+`candidate_project_dirs`, since a first write to a directory with no
+prior session history must create `~/.claude/projects/<sanitized>/`
+rather than erroring — upstream's CLI does this same on-demand creation
+implicitly; the plan's own research pass didn't call it out explicitly,
+but it falls straight out of "first write to a new directory must
+succeed," a correctness requirement, not a scope choice. New
+dependencies added for this phase, all narrowly-scoped and
+well-maintained: `regex` (the several verbatim-ported patterns above),
+`uuid` (RFC-4122 v4 generation for fork/rename/tag entries — genuine
+UUIDs written into real transcript files, unlike Phase 5's internal
+request-id correlation which deliberately avoided a `rand` dependency
+since it never needed cryptographic randomness), `unicode-normalization`
++ `unicode-general-category` (NFC/NFKC + Unicode general-category
+lookups, no `std` equivalent exists).
+
+`docs/sync/parity.yaml` updated: all 25 entries flipped from
+`justified_gap` to `ported` with `tested: true`. 83 new unit tests
+across the six new modules (path/hash/sanitize, ISO-8601 parse/format,
+first-prompt extraction, summary folding, Unicode tag sanitization, the
+`InMemorySessionStore` conformance suite, both chain builders, and
+`build_fork_lines`'s edge cases — empty transcript, `up_to_message_id`
+not found, state-leak field stripping, derived-vs-explicit titles).

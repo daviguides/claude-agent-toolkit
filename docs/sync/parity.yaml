@@ -679,59 +679,59 @@ entries:
   - upstream_symbol: "claude_agent_sdk.list_sessions"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "Session listing/query/mutation subsystem has no Rust equivalent anywhere in this port. No phase in the 10-phase plan scoped it (Phase 3 added the SessionStore trait + data types but never the functions built on top of it). Not exercised by refiner/foreman/prisma. Needs an owner decision: new phase, or explicit scope exclusion."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::list_sessions"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: scans every matching ~/.claude/projects/<sanitized>/ directory (or a specific one, resolved via canonicalize+sanitize+git-worktree fallback), lite-reads each session's head/tail (64KiB each), dedupes by session id keeping the freshest mtime, sorts descending, paginates."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_session_info"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::get_session_info"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: resolves the project directory, lite-reads the session's head/tail, parses summary metadata (title precedence, first-prompt extraction, tag scan, created_at) without loading the full transcript."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_session_messages"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::get_session_messages"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: full-file read, parses transcript entries, rebuilds the multi-leaf/terminal-hunting conversation chain (shared with the store family via session_management::store::build_conversation_chain), filters to visible messages, paginates."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.list_subagents"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::list_subagents"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: recursively collects agent-*.jsonl files under the session's subagents/ directory (supports nested subagents/workflows/<run>/ layouts), extracts agent ids."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_subagent_messages"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::get_subagent_messages"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: locates the matching agent-<id>.jsonl file (recursive search), builds the linear subagent chain (session_management::store::build_subagent_chain), paginates."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.SDKSessionInfo"
     upstream_kind: field
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::SDKSessionInfo"
+    status: ported
+    tested: true
+    notes: "Pure data type shared by both families' info/list functions."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.SessionMessage"
     upstream_kind: field
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::SessionMessage"
+    status: ported
+    tested: true
+    notes: "Pure data type shared by both families' message-chain functions."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.SessionKey"
     upstream_kind: field
     category: options_field
@@ -791,19 +791,19 @@ entries:
   - upstream_symbol: "claude_agent_sdk.InMemorySessionStore"
     upstream_kind: class
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "A reference SessionStore implementation upstream ships for tests/examples. This port defines the trait (Phase 3) but ships no in-memory implementation. See list_sessions entry for the broader subsystem gap."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::InMemorySessionStore"
+    status: ported
+    tested: true
+    notes: "Reference SessionStore implementation backed by in-process HashMaps (entries/mtimes/summaries, monotonic mtime clock); exposes get_entries/size/clear test helpers matching upstream's own conformance-test surface."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.fold_session_summary"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::summary::fold_session_summary"
+    status: ported
+    tested: true
+    notes: "Pure incremental-fold function; exposed publicly so a custom SessionStore adapter can maintain its own list_session_summaries sidecar the way InMemorySessionStore does internally."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.MirrorErrorMessage"
     upstream_kind: class
     category: message_type
@@ -815,131 +815,131 @@ entries:
   - upstream_symbol: "claude_agent_sdk.project_key_for_directory"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::paths::project_key_for_directory"
+    status: ported
+    tested: true
+    notes: "Canonicalize (realpath + NFC) then sanitize (non-alphanumeric -> '-', hash-suffixed truncation past 200 chars via the CLI's own 32-bit rolling hash, base36-encoded)."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.import_session_to_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::import_session_to_store"
+    status: ported
+    tested: true
+    notes: "Appends caller-supplied entries into a SessionStore-backed session, mirroring what a live session mirror would have written."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.list_sessions_from_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::list_sessions_from_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: prefers list_session_summaries with gap-fill via load() for stale/missing sidecars (list_sessions cross-check); falls back to bounded-concurrency (16) full loads when list_session_summaries isn't implemented. Sorted desc, paginated (limit=Some(0) means unlimited, matching upstream's truthy check)."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_session_info_from_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::get_session_info_from_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: load() + fold_session_summary + summary-to-info conversion."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_session_messages_from_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::get_session_messages_from_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: load() + shared conversation-chain builder + visibility filter + pagination."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.list_subagents_from_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::list_subagents_from_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: list_subkeys() filtered to subagents/ prefix, agent id extraction, order-preserving dedup."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.get_subagent_messages_from_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::get_subagent_messages_from_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: resolves the exact subpath via list_subkeys (handles nested subagents/workflows/<run>/agent-<id>), falls back to the flat subagents/agent-{id} path when list_subkeys isn't implemented; drops synthetic agent_metadata entries before chain-building."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.rename_session"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::rename_session"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: appends a 3-key custom-title entry (no uuid/timestamp, distinct wire shape from the _via_store sibling) directly to the session's .jsonl file, creating the project directory on first write."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.tag_session"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::tag_session"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: Unicode-sanitizes the tag (NFKC + Cf/Co/Cn category strip + explicit zero-width/BOM/directional-mark ranges, iterated to a fixed point), appends a 3-key tag entry."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.delete_session"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::delete_session"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: removes the session's .jsonl file and its subagents/ directory, best-effort (missing files are not an error)."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.fork_session"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::disk::fork_session"
+    status: ported
+    tested: true
+    notes: "Direct-local-disk family: shares the uuid-remapping/parent-chain-rebuilding transform (session_management::disk::build_fork_lines) with fork_session_via_store; writes via create_new (O_EXCL semantics) with 0o600 permissions on unix."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.ForkSessionResult"
     upstream_kind: field
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::ForkSessionResult"
+    status: ported
+    tested: true
+    notes: "Pure data type: the forked session's id."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.rename_session_via_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::rename_session_via_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: appends a 5-key custom-title entry (uuid + timestamp included, distinct wire shape from the disk sibling)."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.tag_session_via_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::tag_session_via_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: same Unicode sanitization as the disk sibling, appends a 5-key tag entry via store.append."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.delete_session_via_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::delete_session_via_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: a no-op (not an error) when the store doesn't implement delete — correct for write-once/append-only backends."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.fork_session_via_store"
     upstream_kind: function
     category: public_api
-    rust_equivalent: null
-    status: justified_gap
-    tested: false
-    notes: "See list_sessions entry."
-    justification: "Session listing/query/mutation subsystem (list/get/rename/tag/delete/fork sessions and subagent transcripts, plus an InMemorySessionStore reference implementation) built on top of the SessionStore trait. Phase 3 ported the trait + its data types (SessionKey, SessionStoreEntry, SessionStoreFlushMode, SessionStoreListEntry, SessionSummaryEntry, SessionListSubkeysKey) since ClaudeAgentOptions.session_store depends on them, but no phase in the 10-phase plan (docs/plan/00-overview.md through 11-phase-10-release.md) ever scoped the query/mutation functions built on top of that trait, and none of the three reference use cases audited in Step 10.3b (refiner, foreman, prisma sdk_wrapper.py/claude_runner.py) call any of them. Recorded here as an explicit, acknowledged scope boundary rather than an oversight — flagged to the repo owner as needing a decision: a dedicated follow-up phase, or a permanent scope exclusion documented in vision.md."
+    rust_equivalent: "session_management::store::fork_session_via_store"
+    status: ported
+    tested: true
+    notes: "SessionStore-backed family: shares build_fork_lines with fork_session; appends the rebuilt lines to a freshly-keyed session via store.append."
+    justification: null
   - upstream_symbol: "claude_agent_sdk.SdkBeta"
     upstream_kind: field
     category: options_field
