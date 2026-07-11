@@ -86,4 +86,4 @@ Reserved name: [`claude-agent-toolkit`](https://crates.io/crates/claude-agent-to
 
 ## License
 
-MIT
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option — the Rust ecosystem default.
